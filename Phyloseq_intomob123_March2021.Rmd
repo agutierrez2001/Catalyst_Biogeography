@@ -100,7 +100,8 @@ They are read from a single Excel file where each sheet contains one of the tabl
 ```{r}
   otu_mat<- read_excel("OTU_table.xlsx")
   tax_mat<- read_excel("TAX_table.xlsx")
-  samples_df <- read_excel("samples_df_MLD_July2020_RANKED.xlsx")
+  samples_df <- read_excel("samples_df_MLD_2April2020_RANKED.xlsx")
+   #samples_df <- read_excel("samples_df_MLD_July2020_RANKED.xlsx") # using this metadata cuts down the phyloseq object to 385 samples - I dont know why!!!
 
   
   rownames(samples_df)
@@ -135,7 +136,6 @@ Phyloseq objects need to have row.names
   row.names(samples_df) <- samples_df$Sample_ID ### Standard/safe way of doing to ensure the row names are unique by using the sample ID sent to the sequencing platform 
   samples_df <- samples_df %>% select (-Sample_ID) 
   
-
   
 duplicated(samples_df$Sample_ID)
 
@@ -165,7 +165,11 @@ Transform to phyloseq objects
    
    intomob123_15April2021 <- readRDS("intomob123_phyloseq_15March2021_RANKED.rds") ### load previously saved phyloseq object
 
-sample_variables(intomob123_15April2021)  
+sample_variables(intomob123_15April2021) 
+
+ ## Identify factors within each variable     
+        unique(get_variable( intomob123_15April2021, sample_variables( intomob123_15April2021)[5]))
+        ##plot NMDS - AREAS - WATER MASSES  ##
 
 ```  
   
@@ -195,8 +199,8 @@ sample_variables(intomob123_15April2021)
   ps[["Trap"]] <-  ps[["all"]] %>%  
     subset_samples(Sample_Type == "Trap")
   ps[["Sediment"]] <-  ps[["all"]] %>%  
-    subset_samples(Sample_Type == "Sediment")
-  
+   subset_samples(Sample_Type == "Sediment")
+  # 
   ntaxa(ps[["Seawater"]]) # number of OTUs
   nsamples(ps[["Seawater"]])
   sample_sums( ps[["Seawater"]])
@@ -627,7 +631,7 @@ dev.off()
 ##plot NMDS - for all samples colored by surface and subsurface ##
     
 CairoPDF(file = "R.Figures/nMDS/intomob123_EEZ_dens_layer.pdf", width = 6, height = 4)
-plot_ordination(intomob123, intomob123.ord, type="samples", color="dens_layer", shape= "Water_mass.TS1", title="Samples - Surface vs  Sub-surface") +
+plot_ordination(intomob123, intomob123.ord, type="samples", color="dens_layer", shape= "Water_mass.TS1", title="Samples - Surface vs  Sub-surface" ) +
     theme_bw()
 
 dev.off()
@@ -649,14 +653,10 @@ dev.off()
   #Ordinate samples - NMDS
   intomob123_euphotic.ord <- ordinate(intomob123_euphotic, "NMDS", "bray")
   
-        sample_variables(intomob123_euphotic)  
-
-        
-        ##plot NMDS - AREAS - WATER MASSES  ##
   
-  CairoPDF(file = "R.Figures/nMDS/intomob123_euphotic_area.pdf", width = 6, height = 4)
-  plot_ordination(intomob123_euphotic, intomob123_euphotic.ord, type="samples", color="Water_mass.TS1", shape= "Area2", title="Protist - Euphotic - nMDS - Bray-Curtis") + geom_point(size = 3, alpha = 0.7) +
-  scale_shape_manual(values=c(0, 1, 2, 5, 7, 8, 10, 3, 6)) + 
+  CairoPDF(file = "R.Figures/nMDS/intomob123_euphotic_area_V2.pdf", width = 6, height = 4)
+  plot_ordination(intomob123_euphotic, intomob123_euphotic.ord, type="samples", color="Water_mass.TS1", shape= "Area2", title="Protist - Euphotic - nMDS - Bray-Curtis", label = "Sample_label_depth") + geom_point(size = 3, alpha = 0.7) +
+scale_shape_manual(values=c(0, 1, 2, 5, 7, 8, 10, 3, 6)) + 
  scale_color_manual(values = Water_mass_colors) +
   theme_bw()
   
@@ -665,7 +665,7 @@ dev.off()
   #################################################
   #plot NMDS - Water masses
   CairoPDF(file = "R.Figures/nMDS/intomob123_euphotic_watermassTS1.pdf", width = 6, height = 4)
-  plot_ordination(intomob123_euphotic, intomob123_euphotic.ord, type="samples",   color="Water_mass.TS1", title="Protist - Euphotic - nMDS - Bray-Curtis") + 
+  plot_ordination(intomob123_euphotic, intomob123_euphotic.ord, type="samples",   color="Water_mass.TS1", title="Protist - Euphotic - nMDS - Bray-Curtis",  label = "Sample_label_depth") + 
 geom_point(size = 3, alpha = 0.7) +
     theme_bw()
 
@@ -675,7 +675,7 @@ geom_point(size = 3, alpha = 0.7) +
   
   #plot NMDS - CRUISES
   CairoPDF(file = "R.Figures/nMDS/intomob123_euphotic_cruise.pdf", width = 10, height = 6)
-  plot_ordination(intomob123_euphotic, intomob123_euphotic.ord, type="samples", color="Cruise.TAN", shape= "Water_mass.TS1", title="Protist - Euphotic - nMDS - Bray-Curtis") + geom_point(size = 3, alpha = 0.7)
+  plot_ordination(intomob123_euphotic, intomob123_euphotic.ord, type="samples", color="Cruise.TAN", shape= "Water_mass.TS1", title="Protist - Euphotic - nMDS - Bray-Curtis" ) + geom_point(size = 3, alpha = 0.7)
   dev.off()
   
   # wrapping different water masses
