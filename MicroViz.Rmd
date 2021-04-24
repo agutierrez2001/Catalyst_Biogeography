@@ -1,0 +1,68 @@
+---
+title: "MicroViz"
+author: "Andres"
+date: "23/04/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+library(stringr)
+   library(ggplot2)
+   library(dplyr)
+   library(tidyr)
+   library(tibble)
+   library(readr)
+   library(maps)
+   library(glue)
+library("Cairo")
+library("cairoDevice")
+   library(phyloseq)
+library("readxl")
+library("openxlsx")
+library("gplots")
+library(forcats)
+library(mgcv)
+library(microbiome)
+library(microViz)
+
+ if (!requireNamespace("BiocManager", quietly = TRUE))
+install.packages("BiocManager", type = "binary") # (not binary if you're on linux)
+BiocManager::install(c("stringr", "ggplot2", "dplyr", "tidyr", "tibble", "readr", "maps", "glue", "phyloseq", "readxl", "openxlsx", "gplots","forcats", "mgcv", "microbiome" ))
+
+
+
+devtools::install_github("david-barnett/microViz")
+devtools::install_github("david-barnett/microViz@0.7.2")
+```
+
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+# get some example data
+data("dietswap", package = "microbiome")
+
+# create a couple of numerical variables to use as constraints or conditions
+dietswap <- dietswap %>%
+  ps_mutate(
+    weight = recode(bmi_group, obese = 3, overweight = 2, lean = 1),
+    female = if_else(sex == "female", true = 1, false = 0)
+  )
+# add a couple of missing values to show how microViz handles missing data
+sample_data(dietswap)$female[c(3, 4)] <- NA
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

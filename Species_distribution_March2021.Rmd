@@ -1,0 +1,670 @@
+---
+title: "Class vs T, Sal, NO3, distributions"
+author: "Andres"
+date: "17/05/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+
+#Libraries
+
+```{r cars}
+  library(stringr)
+   library(ggplot2)
+   library(dplyr)
+   library(tidyr)
+   library(tibble)
+   library(readr)
+   library(maps)
+   library(glue)
+   library("cowplot")
+   library("treemapify")
+library("Cairo")
+library("cairoDevice")
+   library(phyloseq)
+library("readxl")
+library("openxlsx")
+library("gplots")
+library(forcats)
+library(mgcv)
+
+```
+
+#Load the phyloseq files
+
+```{r pressure, echo=FALSE}
+  
+  #ps <- list()
+  #ps[["all"]] <- readRDS("intomob123_phyloseq_2April2020_RANKED.rds") 
+  
+  ps <- readRDS("intomob123_phyloseq_15March2021_RANKED.rds") 
+
+sample_data(ps)
+```
+  
+
+# Retain seawater samples, and those from voyages for which we have complete metadata
+
+```{r pressure, echo=FALSE}
+ps_sw <-  ps %>%  
+  subset_samples(Sample_Type == "Seawater") %>%
+      subset_samples(Water_mass.TS1 != "ANT" ) %>%
+  subset_samples((Sampling_Type != "Blank" )) ### Remove blank samples 
+```
+
+## ELiminate taxa with zero reads
+```{r cars} 
+ ps_sw <-  ps_sw %>%  
+     filter_taxa(function(x) sum(x) > 0 , TRUE) 
+ ps_sw
+```
+
+
+# Filtration based on Taxonomy - 
+# I am doing this filtration later in the workflow - but not sure whether it matters doing it before or after normalizing the number of reads to the median sequencing depth or not.
+
+# for PROTISTS
+
+```{r pressure, echo=FALSE}
+  # Remove Metazoa
+  # Remove Fungi
+
+ps_protist <-  ps_sw %>%  
+  subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) 
+```
+
+# for PROTIST -SYNDINALES
+```{r pressure, echo=FALSE}
+  # Remove Metazoa
+  # Remove Fungi
+  # Protist - syndiniales and sarcomonadae
+  
+ps_protist_synd <-  ps_sw %>%  
+        subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) %>%
+      subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+
+get_taxa_unique(ps_protist_synd, "Class")
+
+```
+
+# for PHYTO
+
+```{r pressure, echo=FALSE}
+
+ps_phyto <-  ps_sw %>%  
+  subset_taxa(!(Division %in% c("Metazoa", "Fungi")))   %>%    
+   subset_taxa(Division %in% c("Chlorophyta", "Dinoflagellata", "Cryptophyta", "Haptophyta", "Ochrophyta", "Cercozoa")) %>%
+   subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+
+```
+
+# Colors for plotting taxonomy
+
+```{r pressure, echo=FALSE}
+
+classes_division <- read.table("Color_division.csv", sep=",", header=T, check.names = F, comment.char = "")
+
+classes_division$color_hex_division <-col2hex(classes_division$color_division)
+class_color_division <- structure(as.character(classes_division$color_division),.Names=as.character(classes_division$division))
+
+classes_division$color_hex_class <-col2hex(classes_division$color_class)
+class_color_class <- structure(as.character(classes_division$color_hex_class),.Names=as.character(classes_division$class))
+```
+
+
+# Normalize the otu table 
+# Define function - phyloseq_normalize_median
+
+```{r pressure, echo=FALSE}
+
+## Standardize abundances to the median sequencing depth
+
+
+#PROTIST
+ps_protist_median = median(sample_sums(ps_protist))
+normalize_protist_median = function(x, t=ps_protist_median) round(t * (x / sum(x)))
+ps_protist_std = transform_sample_counts(ps_protist, normalize_protist_median)
+
+#PROTIST-SYND
+ps_protist_synd_median = median(sample_sums(ps_protist_synd))
+normalize_protist_synd_median = function(x, t=ps_protist_synd_median) round(t * (x / sum(x)))
+ps_protist_synd_std = transform_sample_counts(ps_protist_synd, normalize_protist_synd_median)
+
+#PHYTO
+ps_phyto_median = median(sample_sums(ps_phyto))
+normalize_phyto_median = function(x, t=ps_phyto_median) round(t * (x / sum(x)))
+ps_phyto_std = transform_sample_counts(ps_phyto, normalize_phyto_median)
+
+
+```
+
+
+### SPECIES LEVEL ANALYSIS ###
+## OPTION A - ####
+###Select MOST ABUNDANT SPECIES AND PRUNE FOR NEW PS OBJECT THAT CAN BE TRANSFORMED
+
+```{r pressure, echo=FALSE}
+
+    ### most abundant classes
+ species.sum = tapply(taxa_sums(ps_protist_synd_std), tax_table(ps_protist_synd_std)[, "Species"], mean, na.rm=TRUE)
+  top100species = names(sort(species.sum, TRUE))[1:100]
+  Top100species = prune_taxa((tax_table(ps_protist_synd_std)[, "Species"] %in% top100species), ps_protist_synd_std)
+  Top100species
+  
+Species_names = data.frame(Species_reads = sort(taxa_sums(Top100species), TRUE), sorted = 1:ntaxa(Top100species), Species = tax_table(Top100species)[, "Species" ])
+
+write.xlsx(Species_names , file = "Tables/Species_abundance_MEAN_March2021_top100.xlsx")
+
+```
+
+# Dataframe and wide to long transformation of phyloseq object - 
+```{r pressure, echo=FALSE}
+
+otu_df <- as.data.frame(Top100species@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      #filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+  # See https://github.com/joey711/phyloseq/issues/983
+    taxo_df <- as.data.frame(Top100species@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+    otu_df <- left_join(taxo_df, otu_df)
+
+    metadata_df <- data.frame(sample_data(Top100species)) %>%
+      rownames_to_column(var = "file_code")
+
+    otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+    
+    OTU_abund_top100 <-left_join(otu_df, classes_division, by=c("Class"= "class"))
+    
+    write.xlsx(OTU_abund_top100, file = "Tables/OTU_abund_df_protist_synd-March2021_top100.xlsx")
+
+```
+
+
+
+
+### Select most abundant OTUs per WATER MASSES using dplyr - EUPHOTIC
+
+## TOP 100 species ps object - OPTION A for meaningful average abundance values
+
+
+```{r, fig.height=8, fig.width=8}
+OTU_abund_top100_eu  <- OTU_abund_top100 %>%
+  filter(light_layer == "Euphotic") %>%
+  group_by(OTUNumber, Water_mass.TS1) %>%
+  add_tally() %>%
+  mutate(mean_OTU = mean(n_reads, na.rm=TRUE), median_OTU = median(n_reads, na.rm=TRUE), Total_OTU = sum(n_reads, na.rm = TRUE), n_samples = mean(n)) %>%
+  select(OTUNumber:Water_mass.TS1, Sample_Type, light_layer, supergroup:Total_OTU) %>%
+  arrange(Water_mass.TS1, -Total_OTU) %>%
+  unite(OTU_water, OTUNumber, Water_mass.TS1, remove = FALSE) %>% # to allow selecting for distinct OTUs
+  unite(OTU_genus, OTUNumber, Genus, remove = FALSE) %>%
+  unite(OTU_species, OTUNumber, Species, remove = FALSE)
+
+
+## Select most abundant OTUs for plotting SUM TOTAL read abundance values
+OTU_abund_top100_eu_sum <- OTU_abund_top100_eu %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+  arrange(Water_mass.TS1, -Total_OTU) %>%
+   group_by(Water_mass.TS1) %>% 
+   top_n(20,Total_OTU)
+
+## Select most abundant OTUs for plotting MEAN read abundance values
+OTU_abund_top100_eu_mean <- OTU_abund_top100_eu %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+     arrange(Water_mass.TS1, -mean_OTU) %>%
+     group_by(Water_mass.TS1) %>% 
+     top_n(20, mean_OTU)
+
+## Select most abundant OTUs for plotting MEDIAN read abundance values
+OTU_abund_top100_eu_median <- OTU_abund_top100_eu %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+     arrange(Water_mass.TS1, -median_OTU) %>%
+     group_by(Water_mass.TS1) %>% 
+    top_n(20,median_OTU)
+
+    #select(-median_OTU, median_OTU) %>% #relocate(median_OTU, .after = last_col()) %>%
+
+
+write.xlsx(OTU_abund_top100_eu_sum, file = "Tables/Protist_synd_watermass_EUPHOTIC_top20_SUM.xlsx")
+write.xlsx(OTU_abund_top100_eu_mean, file = "Tables/Protist_synd_watermass_EUPHOTIC_top20_MEDIAN.xlsx") ## These values not useful as average abundance across samples
+write.xlsx(OTU_abund_top100_eu_median, file = "Tables/Protist_synd_watermass_EUPHOTIC_top20_MEAN.xlsx") ## These values not useful as average abundance across samples
+
+```
+# Plotting  most abundant OTUs per WATER MASSES using dplyr
+
+```{r, fig.height=8, fig.width=8}
+
+
+# color coding # Water mass - SUM
+color_class1 <- as.character(OTU_abund_top100_eu_sum$color_hex_class)
+names(color_class1) <- as.character(OTU_abund_top100_eu_sum$Class)
+OTU_abund_top100_eu_sum$OTU_species = with(OTU_abund_top100_eu_sum, reorder(OTU_species, Total_OTU))
+
+# color coding # Water mass - MEDIAN
+color_class2 <- as.character(OTU_abund_top100_eu_median$color_hex_class)
+names(color_class2) <- as.character(OTU_abund_top100_eu_median$Class)
+OTU_abund_top100_eu_median$OTU_species = with(OTU_abund_top100_eu_median, reorder(OTU_species, median_OTU))
+
+# color coding # Water mass - MEAN
+color_class3 <- as.character(OTU_abund_top100_eu_mean$color_hex_class)
+names(color_class3) <- as.character(OTU_abund_top100_eu_mean$Class)
+OTU_abund_top100_eu_mean$OTU_species = with(OTU_abund_top100_eu_mean, reorder(OTU_species, mean_OTU))
+
+
+## Plot without reordering using facet_wrap - Problems reordering withing each water mass - SO FOR NOW I NEED TO PLOT WATER MASSES INDEPENDENTLY
+
+#CairoPDF(file = "R.Figures/Species/Protist_Aphotic_top20b.pdf", width = 8, height =12)
+#pdf(file="R.Figures/Species/Protist_euphotic_top20.pdf")
+ggplot(OTU_abund_top100_eu_sum, aes(x=OTU_species, y=Total_OTU, fill=Class)) +
+    geom_bar(stat="identity", width = 0.9) +
+    scale_fill_manual(values = color_class1) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste ("Protist-synd - Euphotic - SUM")) + 
+    theme(axis.text.x=element_text(angle = 45, hjust = 1, size=6)) +
+    theme(axis.text.y=element_text(angle = 0, hjust = 1, size=4)) +
+    theme(panel.grid.major = element_line(size = 0.05, linetype = 'solid',
+                                colour = "grey"), 
+    panel.grid.minor = element_line(size = 0.05, linetype = 'solid',
+                                colour = "grey")) +
+    theme(axis.ticks = element_line(colour = "black", size = 0.05)) +
+    xlab("") + 
+    ylab("Cumulative OTU - Sequencing depth standarized abundance") +
+    coord_flip() +
+    facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+ 
+  ggsave("Protist_synd_euphotic_top20_SUM_OTUs.pdf", path = "R.Figures/Species/water_mass", dpi = 300, height = 4, width = 8)
+  
+### Plot without reordering using facet_wrap - Problems reordering withing each water mass
+```
+
+
+### SO FOR NOW I NEED TO PLOT WATER MASSES INDEPENDENTLY - One water mass at a time
+
+## SUM of reads - Get same ranking as using the mean - different absolute numbers
+```{r, fig.height=8, fig.width=8}
+  
+## Reordering and plotting using forcat package - One water mass at at time
+
+ Top_otu_order <- OTU_abund_top100_eu_sum %>%
+   filter(Water_mass.TS1 == "SAW") %>%
+   mutate(name = fct_reorder(OTU_species, Total_OTU)) 
+   
+ #CairoPDF(file = "R.Figures/Species/Protist_synd_euphotic_top20_SAW_TOP100.pdf", width = 3, height = 4) 
+ ggplot(Top_otu_order, aes(x=name, y=Total_OTU, fill=Class)) +
+    geom_bar(stat = "identity", width = 0.95) +
+    coord_flip() +
+    #scale_fill_viridis_d(option = "plasma") +
+    scale_fill_manual(values = color_class1) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste (" Protist - Synd- Euphotic - SAW - SUM")) + 
+    theme(axis.text.x=element_text(angle = 0, hjust = 1, size=12)) +
+    theme(axis.text.y=element_text(angle = 45, hjust = 1, size=12)) +
+    xlab("") + 
+    ylab("Sum OTU - Sequencing depth standarized abundance")
+    #facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+ 
+ ggsave("Protist_synd_euphotic_top20_SAW_SUM.pdf", path = "R.Figures/Species", dpi = 300,  width = 8, height = 16, scale=1.2)
+ 
+
+```
+
+## MEAN of READS
+```{r, fig.height=8, fig.width=8}
+  
+## Reordering and plotting using forcat package - One water mass at at time
+
+ Top_otu_order <- OTU_abund_top100_eu_mean %>%
+   filter(Water_mass.TS1 == "STF") %>%
+   mutate(name = fct_reorder(OTU_species, mean_OTU)) 
+   
+ #CairoPDF(file = "R.Figures/Species/Protist_synd_euphotic_top20_STF_TOP100.pdf", width = 3, height = 4) 
+ ggplot(Top_otu_order, aes(x=name, y=mean_OTU, fill=Class)) +
+    geom_bar(stat = "identity", width = 0.95) +
+    coord_flip() +
+    #scale_fill_viridis_d(option = "plasma") +
+    scale_fill_manual(values = color_class3) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste (" Protist - Synd- Euphotic - STF - MEAN")) + 
+    theme(axis.text.x=element_text(angle = 0, hjust = 1, size=12)) +
+    theme(axis.text.y=element_text(angle = 45, hjust = 1, size=12)) +
+    xlab("") + 
+    ylab("Mean OTU - Sequencing depth standarized abundance")
+    #facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+ 
+ ggsave("Protist_synd_euphotic_top20_STF_MEAN.pdf", path = "R.Figures/Species", dpi = 300,  width = 8, height = 16, scale=1.2)
+ 
+
+```
+
+# Select most abundant OTUs per AREA using dplyr
+# THESE PLOTS NOT INCLUDED IN the manuscript March2021 version
+
+```{r, fig.height=8, fig.width=8}
+OTU_abund_top100_eu_area <- OTU_abund_top100 %>%
+  filter(light_layer == "Euphotic") %>%
+  group_by(OTUNumber, Area2) %>%
+  mutate(mean_OTU_area = mean(n_reads, na.rm=TRUE), median_OTU_area = median(n_reads, na.rm=TRUE), Total_OTU_area = sum(n_reads, na.rm = TRUE)) %>%
+  select(OTUNumber:Water_mass.TS1, Sample_Type, light_layer, supergroup:Total_OTU_area) %>%
+  arrange(Area2, -Total_OTU_area) %>%
+  unite(OTU_water, OTUNumber, Area2, remove = FALSE) %>% # to allow selecting for distinct OTUs
+  unite(OTU_genus, OTUNumber, Genus, remove = FALSE) %>%
+  unite(OTU_species, OTUNumber, Species, remove = FALSE)
+
+
+## Select most abundant OTUs for plotting SUM TOTAL abundance values
+OTU_abund_top100_eu_area_sum <- OTU_abund_top100_eu_area %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+   group_by(Area2) %>% 
+   top_n(20,Total_OTU_area)
+
+## Select most abundant OTUs for plotting MEDIAN abundance values
+OTU_abund_top100_eu_area_median <- OTU_abund_top100_eu_area %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+  arrange(Area2, -median_OTU_area) %>%
+  group_by(Area2) %>% 
+  top_n(20,median_OTU_area)
+
+## Select most abundant OTUs for plotting MEAN abundance values
+OTU_abund_top100_eu_area_mean <- OTU_abund_top100_eu_area %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+  arrange(Area2, -mean_OTU_area) %>%
+  group_by(Area2) %>% 
+  top_n(20,mean_OTU_area)
+
+write.xlsx(OTU_abund_top100_eu_area_sum, file = "Tables/Protist_Area_Euphotic_top20_TOTAL.xlsx")
+write.xlsx(OTU_abund_top100_eu_area_median, file = "Tables/Protist_Area_Euphotic_top20_MEDIAN.xlsx")
+write.xlsx(OTU_abund_top100_eu_area_mean, file = "Tables/Protist_Area_Euphotic_top20_MEAN.xlsx")
+
+```
+
+# Plotting  most abundant OTUs per REGIONS using dplyr 
+
+```{r, fig.height=8, fig.width=8}
+
+# color coding # AREA - SUM
+color_class4 <- as.character(OTU_abund_top100_eu_area_sum$color_hex_class)
+names(color_class4) <- as.character(OTU_abund_top100_eu_area_sum$Class)
+OTU_abund_top100_eu_area_sum$OTU_species = with(OTU_abund_top100_eu_area_sum, reorder(OTU_species, Total_OTU_area))
+
+# color coding # AREA - MEDIAN
+color_class5 <- as.character(OTU_abund_top100_eu_area_median$color_hex_class)
+names(color_class5) <- as.character(OTU_abund_top100_eu_area_median$Class)
+OTU_abund_top100_eu_area_median$OTU_species = with(OTU_abund_top100_eu_area_median, reorder(OTU_species, median_OTU_area))
+
+# color coding # AREA - MEAN
+color_class6 <- as.character(OTU_abund_top100_eu_area_mean$color_hex_class)
+names(color_class6) <- as.character(OTU_abund_top100_eu_area_mean$Class)
+OTU_abund_top100_eu_area_mean$OTU_species = with(OTU_abund_top100_eu_area_mean, reorder(OTU_species, mean_OTU_area))
+
+
+## Plot without reordering using facet_wrap - Problems reordering withing each water mass
+
+#CairoPDF(file = "R.Figures/Species/Regions/Protist_synd_euphotic_regions_top20.pdf", width = 8, height =12) 
+#pdf(file="R.Figures/Species/Protist_euphotic_top20.pdf")
+ggplot(Top_otu_area_sum, aes(x=OTU_species, y=Total_OTU_area, fill=Class)) +
+    geom_bar(stat="identity", width = 0.95) +
+    scale_fill_manual(values = color_class6) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste ("Protist - SYND - Euphotic - SUM")) + 
+    theme(axis.text.x=element_text(angle = 0, hjust = 1, size=12)) +
+    theme(axis.text.y=element_text(angle = 0, hjust = 1, size=12)) +
+    xlab("") + 
+    ylab("Sum OTU - Sequencing depth standarized abundance") +
+    coord_flip() +
+    facet_wrap(~Area2, scales="free")
+ dev.off()
+ 
+   #ggsave("Protist_synd_euphotic_regions_top20.pdf", path = "R.Figures/Species", dpi = 300,  width = 8, height = 16, scale=1.2)
+ 
+```
+
+# Plotting  most abundant OTUs per REGIONS using dplyr - One region at a time
+
+```{r, fig.height=8, fig.width=8}
+  
+## Reordering and plotting using forcat package - One water mass at at time
+## Areas : Bio-SBM, Bio-STF, Bio-NBM, Campbell Plateau, ChathamRise, Cross-shelf, SAF, STW SpringBloom
+ Top_otu_order_area <- OTU_abund_top100_eu_area_sum %>%
+   filter(Area2 == "Cross-shelf") %>%
+   mutate(name = fct_reorder(OTU_species, Total_OTU_area)) 
+   
+ #CairoPDF(file = "R.Figures/Species/Regions/Protist_synd_euphotic_top20_BoP.pdf", width = 3, height = 4) 
+ ggplot(Top_otu_order_area, aes(x=name, y=Total_OTU_area, fill=Class)) +
+    geom_bar(stat = "identity", width = 0.95) +
+    coord_flip() +
+    #scale_fill_viridis_d(option = "plasma") +
+    scale_fill_manual(values = color_class4) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste (" Protist-Synd - Euphotic - Cross-shelf")) + 
+    theme(axis.text.x=element_text(angle = 0, hjust = 1, size=12)) +
+    theme(axis.text.y=element_text(angle = 45, hjust = 1, size=12)) +
+    xlab("") + 
+    ylab("Cumulative OTU - Sequencing depth standarized abundance")
+    #facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+
+  ggsave("Protist_synd_Euphotic_top20_Cross-shelf.pdf", path = "R.Figures/Species", dpi = 300,  width = 8, height = 16, scale=1.2)
+
+```
+# #############################################################################
+## OPTION B - #### -  I AM NOT USING THIS FOR NOW
+# #############################################################################
+### USE all the Species in the ps so we can TRANSFORM to long but 
+### removing n_reads = 0 --> IMPORTANT for sum values does not matter but for average values these are only calculated among samples when present 
+
+
+# PROTIST - SYND species Dataframe and wide to long transformation of phyloseq object - 
+```{r pressure, echo=FALSE}
+
+otu_df <- as.data.frame(ps_protist_synd_std@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+  # See https://github.com/joey711/phyloseq/issues/983
+    taxo_df <- as.data.frame(ps_protist_synd_std@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+    otu_df <- left_join(taxo_df, otu_df)
+
+    metadata_df <- data.frame(sample_data(ps_protist_synd_std)) %>%
+      rownames_to_column(var = "file_code")
+
+    otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+    
+    OTU_abund_present <-left_join(otu_df, classes_division, by=c("Class"= "class"))
+    
+    write.xlsx(OTU_abund_present, file = "Tables/OTU_abund_df_protist_synd-March2021_PRESENT.xlsx")
+
+```
+
+## OTU_abund_present - OPTION B for mean abundance WHEN PRESENT ONLY
+
+
+```{r, fig.height=8, fig.width=8}
+OTU_abund <- OTU_abund_present %>%
+  filter(light_layer == "Euphotic") %>%
+  group_by(OTUNumber, Water_mass.TS1) %>%
+  add_tally() %>%
+  mutate(mean_OTU = mean(n_reads, na.rm=TRUE), median_OTU = median(n_reads, na.rm=TRUE), Total_OTU = sum(n_reads, na.rm = TRUE), n_samples = mean(n)) %>%
+  select(OTUNumber:Water_mass.TS1, Sample_Type, light_layer, supergroup:Total_OTU) %>%
+  arrange(Water_mass.TS1, -Total_OTU) %>%
+  unite(OTU_water, OTUNumber, Water_mass.TS1, remove = FALSE) %>% # to allow selecting for distinct OTUs
+  unite(OTU_genus, OTUNumber, Genus, remove = FALSE) %>%
+  unite(OTU_species, OTUNumber, Species, remove = FALSE)
+
+
+## Select most abundant OTUs for plotting SUM TOTAL read abundance values
+Top_otu_sum <- OTU_abund %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+  arrange(Water_mass.TS1, -Total_OTU) %>%
+   group_by(Water_mass.TS1) %>% 
+   top_n(20,Total_OTU)
+
+## Select most abundant OTUs for plotting MEAN read abundance values
+Top_otu_mean <- OTU_abund %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+     arrange(Water_mass.TS1, -mean_OTU) %>%
+     group_by(Water_mass.TS1) %>% 
+     top_n(20, mean_OTU)
+
+## Select most abundant OTUs for plotting MEDIAN read abundance values
+Top_otu_median <- OTU_abund %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+     arrange(Water_mass.TS1, -median_OTU) %>%
+     group_by(Water_mass.TS1) %>% 
+    top_n(20,median_OTU)
+
+    #select(-median_OTU, median_OTU) %>% #relocate(median_OTU, .after = last_col()) %>%
+
+
+write.xlsx(Top_otu_sum, file = "Tables/Protist_synd_watermass_EUPHOTIC_top20_SUM-PRESENT.xlsx")
+write.xlsx(Top_otu_median, file = "Tables/Protist_synd_watermass_EUPHOTIC_top20_MEDIAN-PRESENT.xlsx") ## These values not useful as average abundance across samples
+write.xlsx(Top_otu_mean, file = "Tables/Protist_synd_watermass_EUPHOTIC_top20_MEAN-PRESENT.xlsx") ## These values not useful as average abundance across samples
+
+```
+
+
+
+# Plotting  most abundant OTUs per WATER MASSES using dplyr
+
+```{r, fig.height=8, fig.width=8}
+
+
+# color coding # Water mass - SUM
+color_class1 <- as.character(Top_otu_sum$color_hex_class)
+names(color_class1) <- as.character(Top_otu_sum$Class)
+Top_otu_sum$OTU_species = with(Top_otu_sum, reorder(OTU_species, Total_OTU))
+
+# color coding # Water mass - MEDIAN
+color_class2 <- as.character(Top_otu_median$color_hex_class)
+names(color_class2) <- as.character(Top_otu_median$Class)
+Top_otu_median$OTU_species = with(Top_otu_median, reorder(OTU_species, median_OTU))
+
+# color coding # Water mass - MEAN
+color_class3 <- as.character(Top_otu_mean$color_hex_class)
+names(color_class3) <- as.character(Top_otu_mean$Class)
+Top_otu_mean$OTU_species = with(Top_otu_mean, reorder(OTU_species, mean_OTU))
+
+
+## Plot without reordering using facet_wrap - Problems reordering withing each water mass
+
+#CairoPDF(file = "R.Figures/Species/Protist_Aphotic_top20b.pdf", width = 8, height =12)
+#pdf(file="R.Figures/Species/Protist_euphotic_top20.pdf")
+ggplot(Top_otu_sum, aes(x=OTU_species, y=Total_OTU, fill=Class)) +
+    geom_bar(stat="identity", width = 0.9) +
+    scale_fill_manual(values = color_class1) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste ("Protist-synd - Euphotic - SUM")) + 
+    theme(axis.text.x=element_text(angle = 45, hjust = 1, size=6)) +
+    theme(axis.text.y=element_text(angle = 0, hjust = 1, size=4)) +
+    theme(panel.grid.major = element_line(size = 0.05, linetype = 'solid',
+                                colour = "grey"), 
+    panel.grid.minor = element_line(size = 0.05, linetype = 'solid',
+                                colour = "grey")) +
+    theme(axis.ticks = element_line(colour = "black", size = 0.05)) +
+    xlab("") + 
+    ylab("Cumulative OTU - Sequencing depth standarized abundance") +
+    coord_flip() +
+    facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+ 
+  ggsave("Protist_synd_euphotic_top20_SUM_OTUs.pdf", path = "R.Figures/Species/water_mass", dpi = 300, height = 4, width = 8)
+  
+
+```
+
+# Plotting  most abundant OTUs per WATER MASSES using dplyr - One water mass at a time
+
+```{r, fig.height=8, fig.width=8}
+  
+## Reordering and plotting using forcat package - One water mass at at time
+
+ Top_otu_order <- Top_otu_sum %>%
+   filter(Water_mass.TS1 == "STF") %>%
+   mutate(name = fct_reorder(OTU_species, Total_OTU)) 
+   
+ #CairoPDF(file = "R.Figures/Species/Protist_synd_euphotic_top20_STF_TOP100.pdf", width = 3, height = 4) 
+ ggplot(Top_otu_order, aes(x=name, y=Total_OTU, fill=Class)) +
+    geom_bar(stat = "identity", width = 0.95) +
+    coord_flip() +
+    #scale_fill_viridis_d(option = "plasma") +
+    scale_fill_manual(values = color_class1) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste (" Protist - Synd- Euphotic - STF - SUM")) + 
+    theme(axis.text.x=element_text(angle = 0, hjust = 1, size=12)) +
+    theme(axis.text.y=element_text(angle = 45, hjust = 1, size=12)) +
+    xlab("") + 
+    ylab("Sum OTU - Sequencing depth standarized abundance")
+    #facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+ 
+ ggsave("Protist_synd_euphotic_top20_STW_SUM.pdf", path = "R.Figures/Species/water_mass", dpi = 300,  width = 8, height = 16, scale=1.2)
+ 
+ # Number of samples present
+ Top_otu_order <- Top_otu_mean %>%
+   filter(Water_mass.TS1 == "STF") %>%
+   mutate(name = fct_reorder(OTU_species, mean_OTU)) 
+ 
+ ggplot(Top_otu_order, aes(x=name, y=n, fill=Class)) +
+    geom_bar(stat = "identity", width = 0.95) +
+    coord_flip() +
+    #scale_fill_viridis_d(option = "plasma") +
+    scale_fill_manual(values = color_class3) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste (" Number of samples present - STF")) + 
+    theme(axis.text.x=element_text(angle = 0, hjust = 1, size=12)) +
+    theme(axis.text.y=element_text(angle = 45, hjust = 1, size=12)) +
+    xlab("") + 
+    ylab("Number of samples")
+    #facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+ 
+ ggsave("Protist_synd_euphotic_top20_STF_Nsamples_MEAN.pdf", path = "R.Figures/Species/water_mass", dpi = 300,  width = 8, height = 16, scale=1.2)
+
+```
+
+
+
+
+
+

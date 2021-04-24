@@ -1,0 +1,762 @@
+---
+title: "Phyloseq analysis catalyst"
+author: "Andres Gutierrez"
+date: '`r format(Sys.time(), "%d %m %Y")`'
+header-includes:
+   - \usepackage{color, fancyvrb}
+output:
+  rmdformats::readthedown:
+    highlight: kate
+    number_sections : yes    
+  pdf_document: 
+    toc: yes
+    toc_depth: 2
+    number_sections : yes
+---
+
+```{r knitr_init, echo=FALSE, warning=FALSE, cache=TRUE}
+library(knitr)
+library(rmdformats)
+library("kableExtra")
+
+## Global options
+# The following line is necessary to make sure that 
+# everything is not reevaluated each time the file is knit
+# Note : in the case of this report it is necessary to leave cache= FALSE
+
+options(max.print="75")
+knitr::opts_chunk$set(fig.width=8, 
+                      fig.height=6, 
+                      eval=TRUE, 
+                      cache=TRUE,
+                      echo=TRUE,
+                      prompt=FALSE,
+                      tidy=TRUE,
+                      comment=NA,
+                      message=FALSE,
+                      warning=FALSE)
+opts_knit$set(width=85)
+```
+
+
+```{r, echo=FALSE, fig.cap="Carbom paper in ISME", out.width = '100%', fig.align= "center"}
+knitr::include_graphics("../img/carbom_isme.png")
+```
+
+```R
+install.packages("dplyr")     # To manipulate dataframes
+install.packages("readxl")    # To read Excel files into R
+
+install.packages("ggplot2")   # for high quality graphics
+
+source("https://bioconductor.org/biocLite.R")
+biocLite("phyloseq")        
+```
+
+* Run the "R chunks" 
+
+# Step by step
+
+## Load necessary libraries
+
+
+```{r libraries, message=FALSE}
+library("phyloseq")
+library("vegan")
+library("ggplot2")      # graphics
+library("readxl")       # necessary to import the data from Excel file
+library("dplyr")        # filter and reformat data frames
+library("stringr")
+library("DESeq2")
+library("Rmisc")
+library("dplyr")
+library("tidyr")
+library("openxlsx")
+library("lubridate")
+library("reshape2")
+library("Cairo")
+library("cairoDevice")
+library("hrbrthemes")
+library("viridis")
+library("Cairo")
+library("cairoDevice")
+library(glue)
+
+```
+
+## Read the data and create phyloseq objects
+
+Change your working directory to where the files are located
+
+Three tables are needed
+
+* OTU
+* Taxonomy
+* Samples
+
+They are read from a single Excel file where each sheet contains one of the tables
+
+
+```{r}
+  otu_mat<- read_excel("OTU_table.xlsx")
+  tax_mat<- read_excel("TAX_table.xlsx")
+   samples_df <- read_excel("Metadata/samples_df_MLD_March2021_RANKED.xlsx")
+
+  
+  rownames(samples_df)
+  colnames(otu_mat)
+  
+```
+
+Phyloseq objects need to have row.names
+
+* define the row names from the otu column
+
+```{r, warning=FALSE}
+    row.names(otu_mat) <- otu_mat$OTUNumber
+```
+
+* remove the column otu since it is now used as a row name and transform to number
+
+```{r}
+    otu_mat <- otu_mat %>% select (-OTUNumber) 
+
+```
+
+* Idem for the two other matrixes 
+
+```{r, warning=FALSE}
+  row.names(tax_mat) <- tax_mat$OTUNumber
+  tax_mat <- tax_mat %>% select (-OTUNumber) 
+
+  row.names(samples_df) <- samples_df$Sample_ID ### Standard/safe way of doing to ensure the row names are unique by using the sample ID sent to the sequencing platform 
+  samples_df <- samples_df %>% select (-Sample_ID) 
+  
+  
+duplicated(samples_df$Sample_ID)
+
+```
+
+Transform into matrixes otu and tax tables (sample table can be left as data frame)
+
+```{r}
+  otu_mat <- as.matrix(otu_mat)
+  tax_mat <- as.matrix(tax_mat)
+  
+  mode(otu_mat) <- "numeric"
+```
+
+Transform to phyloseq objects
+
+```{r}
+  OTU = otu_table(otu_mat, taxa_are_rows = TRUE)
+  TAX = tax_table(tax_mat)
+  samples = sample_data(samples_df)
+  
+  intomob123 <- phyloseq(OTU, TAX, samples)
+   intomob123
+   
+  saveRDS(intomob123,str_c("intomob123_phyloseq_15March2021_RANKED.rds"))
+
+   
+   intomob123_15April2021 <- readRDS("intomob123_phyloseq_15March2021_RANKED.rds") ### load previously saved phyloseq object
+
+sample_variables(intomob123_15April2021) 
+
+ ## Identify factors within each variable     
+        unique(get_variable( intomob123_15April2021, sample_variables( intomob123_15April2021)[5]))
+        ##plot NMDS - AREAS - WATER MASSES  ##
+
+```  
+  
+
+## Manipulating - accessing data in phyloseq
+
+```{r}
+ntaxa(intomob123_sw) # number of OTUs
+nsamples(intomob123_sw) #number of samples
+sample_names(intomob123_sw) [1:10] #sample names first ten
+sample_variables(intomob123_sw)[1:6] # sample variable number 6
+
+get_variable(intomob123_sw, sample_variables(intomob123_sw)[14])[1:10] #first 10 values of variable 6
+get_taxa(intomob123_sw) [,1:6] # to investigate abundance of OTUs in first 6 samples
+get_sample(intomob123_sw)[1,] # to investigate abundance of a single OTU across samples
+
+get_taxa_unique(intomob123, "Class") # gets unique taxa of a given object and rank
+otu_table(intomob123) ## access the otu table of an object
+rank_names(intomob123)
+sample_data(intomob123) ## access the samples data from an object
+
+sample_sums(intomob123_sw) [1:6] ## sum of abundances of samples 1 to 6
+plot(sample_sums(intomob123_sw) )
+taxa_sums(intomob123_sw)[1:6] ## sum of abundances of each taxa useful for filtering OTU based on their abundances
+plot(taxa_sums(intomob123_sw)) # plot the abundancs of the different taxa
+
+intomob123_phylum <- tax_glom(intomob123, taxrank = "Class") #taxonomic-agglommeration method, which merges taxa of the same taxonomic category                                                   for a user-specified taxonomic level.
+
+z = filter_taxa(intomob123, function(x) mean(x) > 1e-5, TRUE) # TRUE option on, it returns the objected already trimmed
+
+```
+
+#Load previously saved phyloseq object
+
+#Load the phyloseq files
+
+```{r pressure, echo=FALSE}
+  
+  ps <- list()
+  ps[["all"]] <- readRDS("intomob123_phyloseq_15March2021_RANKED.rds") 
+  
+
+  
+```
+  
+
+# Split samples into subsets - Sample types
+
+```{r pressure, echo=FALSE}
+  #Very important, must remove taxa that are not present in one sample set
+  #creating sample_types
+  sample_types = c("Seawater", "Trap", "Sediment")
+  
+  ps[["Seawater"]] <-  ps[["all"]] %>%  
+    subset_samples(Sample_Type == "Seawater")
+  ps[["Trap"]] <-  ps[["all"]] %>%  
+    subset_samples(Sample_Type == "Trap")
+  ps[["Sediment"]] <-  ps[["all"]] %>%  
+   subset_samples(Sample_Type == "Sediment")
+  # 
+  ntaxa(ps[["Seawater"]]) # number of OTUs
+  nsamples(ps[["Seawater"]])
+  sample_sums( ps[["Seawater"]])
+  median(sample_sums( ps[["Seawater"]]))
+  sum(sample_sums( ps[["Seawater"]]))
+  
+
+```
+
+##Subsampled object - Only seawater samples - remove data missing metadata
+```{r}
+
+ps[["EEZ"]] <- subset_samples(ps[["Seawater"]], (Water_mass.TS1 != "ANT" )) ### Remove Samples south of the SAF (from TAN1802 - Except CTD1 deployed in SAF 58.027 S; 174.2135 E)
+
+ps[["EEZ"]] <- subset_samples(ps[["EEZ"]], (Sampling_Type != "Blank" )) ### Remove blanks
+
+#ps[["EEZ-SOAP"]] <- subset_samples(ps[["EEZ"]], (Project != "SOAP" )) ### Remove SOAP samples until I get metadata complete
+
+#ps[["EEZ-Cliff"]] <- subset_samples(ps[["EEZ-SOAP"]], (Project != "Bay of Plenty" )) ### Remove Bay of Plenty samples until I get metadata complete
+
+ntaxa(ps[["EEZ"]]) # number of OTUs
+  nsamples(ps[["EEZ"]])
+  sample_sums( ps[["EEZ"]])
+  median(sample_sums( ps[["EEZ"]]))
+  
+sum(sample_sums( ps[["EEZ"]]))
+median(sample_sums(ps[["EEZ"]]))
+range(sample_sums(ps[["EEZ"]]))
+
+```
+
+
+# Filtration based on Taxonomy - for Protist
+
+```{r pressure, echo=FALSE}
+ 
+## Protist (Remove Metazoa & Fungi)
+ps[["EEZ"]] <- ps[["EEZ"]] %>% 
+        subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) 
+       #subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+      
+ntaxa(ps[["EEZ"]]) # number of OTUs
+  nsamples(ps[["EEZ"]])
+  sample_sums( ps[["EEZ"]])
+  median(sample_sums( ps[["EEZ"]]))
+  
+median(sample_sums(ps[["EEZ"]]))
+range(sample_sums(ps[["EEZ"]]))
+print(ps[["EEZ"]] )
+      
+## Protist - syndiniales and sarcomonadae
+  ps[["EEZ-synd"]] <- ps[["EEZ"]] %>% 
+        subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) %>%
+      subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+  
+## Phyto
+  ps[["EEZ-phyto"]] <- ps[["EEZ"]] %>%
+        subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) %>%
+        subset_taxa(Division %in% c("Chlorophyta", "Dinoflagellata", "Cryptophyta", "Haptophyta", "Ochrophyta", "Cercozoa")) %>%
+        subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+
+  
+```
+
+# Split SEAWATER samples into subsets - Water_mass.TS1
+# Number of sequences/per sample; Ntotal ASVs; N Samples 
+```{r pressure, echo=FALSE}
+  #Very important, must remove taxa that are not present in one sample set
+  
+#creating sample_types
+  Water_mass.TS1 = c("STW", "STF", "SAW")
+
+  ps[["STW"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Water_mass.TS1 == "STW")
+  ps[["STF"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Water_mass.TS1 == "STF")
+  ps[["SAW"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Water_mass.TS1 == "SAW")
+  #ps[["ANT"]] <-  ps[["Seawater"]] %>%  
+    #subset_samples(Water_mass.TS1 == "ANT")
+  
+  
+ # Median number of reads in samples across different water masses
+  for (one_sample_type in Water_mass.TS1) {
+    
+    
+      nnn <- median(sample_sums(ps[[one_sample_type]])  )
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(nnn)
+      cat("============================\n")
+      
+  }
+  
+  # Remove ASVs that are not present in the dataset
+  for (one_sample_type in Water_mass.TS1) {
+
+      ps[[one_sample_type]] <- ps[[one_sample_type]] %>% 
+        filter_taxa(function(x) sum(x) > 0 , TRUE) 
+      
+     
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(ps[[one_sample_type]] )
+      cat("============================\n")
+      
+  }
+```
+
+# Creating lists for some specific cases - Euphotic vs aphotic
+
+
+```{r pressure, echo=FALSE}
+ water_mass_light= c("EEZ_euphotic","EEZ_aphotic","STW_euphotic","STW_aphotic", "STF_euphotic", "STF_aphotic", "SAW_euphotic", "SAW_aphotic")
+
+ps[["EEZ_euphotic"]] <-  ps[["EEZ"]] %>%  subset_samples(light_layer== "Euphotic")
+
+ps[["EEZ_aphotic"]] <-  ps[["EEZ"]] %>%  subset_samples(light_layer== "Aphotic")
+
+ps[["STW_euphotic"]] <-  ps[["STW"]] %>%  subset_samples(light_layer== "Euphotic") 
+
+ps[["STW_aphotic"]] <-  ps[["STW"]] %>%  subset_samples(light_layer== "Aphotic") 
+
+ps[["STF_euphotic"]] <-  ps[["STF"]] %>%  subset_samples(light_layer== "Euphotic") 
+
+ps[["STF_aphotic"]] <-  ps[["STF"]] %>%  subset_samples(light_layer== "Aphotic")
+
+ps[["SAW_euphotic"]] <-  ps[["SAW"]] %>%  subset_samples(light_layer== "Euphotic") 
+
+ps[["SAW_aphotic"]] <-  ps[["SAW"]] %>%  subset_samples(light_layer== "Aphotic")
+
+ # Median number of reads in samples across different water masses
+  for (one_sample_type in water_mass_light) {
+    
+    
+      nnn <- median(sample_sums(ps[[one_sample_type]])  )
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(nnn)
+      cat("============================\n")
+      
+  }
+# Phyloseq objects N samples and ASVs
+for (one_sample_type in water_mass_light) {
+
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(ps[[one_sample_type]] )
+      cat("============================\n")
+      
+}
+
+```
+
+### Richness and Diversity 
+
+###Set colors for plotting
+```{r, fig.height=4, fig.width=4}
+# Set colors for plotting
+Water_mass_colors <- c(
+   "#00688b", "#44c45d","#e0301e")
+# PwC palette for STW
+#coastlines palette for STF
+# Flux palette for SAW
+Area_colors <- c(
+  "#e0301e","#ffc100", "#00688b","#39ff14" ,"#0befff","#0a5700", "#ff77ff","#708090","#602320")
+
+Area_BoP_colors <- c("#ffc100", "#00688b","#39ff14" ,"#0befff","#0a5700", "#ff77ff","#708090","#602320") # if Bay of Plenty is left out
+
+Nitrate_colors <- c("#dc6900", "#00688b", "#0befff","#44c45d", "#a32020","#c0c0c0","#00b5e2","#602320")
+
+```
+
+#### WATER MASS  & AREA DIVERSITY
+
+## EUPHOTIC - Water mass - FIGURE 3
+
+```{r fig.height=5, fig.width=10}
+# Use euphotic or all (euphotic + aphotic)
+ps[["EEZ_euphotic"]] 
+ps[["EEZ"]]
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_ALL_Water.Mass_March2021", width = 10, height = 5) 
+    plot_richness( ps[["EEZ"]], x="Water_mass.TS1", color="Water_mass.TS1", measures = c("Observed","Shannon"), title = "Protist ALL") + geom_boxplot(alpha= 0.8, outlier.size = 0.2, position=position_dodge(.9)) +
+        geom_point(size = 0.1) +
+          scale_color_manual(values = Water_mass_colors) +
+        theme_bw() +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+## AREA
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_ALL_Area2_March2021", width = 10, height = 5) 
+    plot_richness( ps[["EEZ"]], x="Water_mass.TS1", color="Area2", measures = c("Observed","Shannon"), title = "Protist ALL") + geom_boxplot(alpha= 0.8, outlier.size = 0.2, position=position_dodge(.9)) +
+        geom_point(size = 0.1) +
+          scale_color_manual(values = Area_colors) +
+        theme_bw() +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+```
+
+### LAtitude and diversity - ALL or EUPHOTIC - FIGURE S4 and S5 MERGED
+###from http://joey711.github.io/phyloseq/plot_richness-examples
+
+```{r fig.height=3, fig.width=5}
+## Continuous Lat - ALL or EUPHOTIC - color scaled with Temperature
+
+ps[["EEZ_euphotic"]] 
+ps[["EEZ"]]
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_ALL_Latitude_T_continuous_March2021", width = 10, height = 5) 
+    plot_richness(ps[["EEZ"]], x="Latitude.CTD", color="Temperature.CTD", measures = c("Observed","Shannon"), title = "Protist ALL - Latitude") + geom_point(size = 0.1) +
+        #scale_color_manual(values = Area_colors) +
+        scale_color_viridis(option = "C") + 
+        geom_point(size = 0.1) +
+        theme_bw() +
+        #scale_x_continuous(limits = c(0, 10)) +
+        scale_x_continuous(breaks = c(-35, -40, -45, -50, -55)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+## Water mass - EEZ
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_EUPHOTIC_Latitude1_watermass_March2021", width = 10, height = 5) 
+    plot_richness(ps[["EEZ_euphotic"]], x=as.character("RankLat1"), color="Water_mass.TS1", measures = c("Observed","Shannon"), title = "Protist EUPHOTIC - Latitude") + geom_boxplot(alpha= 0.8, outlier.size = 0.2) +
+                scale_color_manual(values = Water_mass_colors) +
+        geom_point(size = 0.1) +
+        theme_bw() +
+        #scale_x_continuous(limits = c(0, 10)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+##Area -boxplot - EEZ
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_ALL_Latitude1_Area2_March2021", width = 10, height = 5) 
+
+  plot_richness(ps[["EEZ"]], x="RankLat1", color="Area2", measures = c("Observed","Shannon"), title = "Protist ALL - Latitude") + geom_boxplot(alpha= 0.8, outlier.size = 0.2) +
+                scale_color_manual(values = Area_colors) +
+        geom_point(size = 0.1) +
+        theme_bw() +
+        #scale_x_continuous(limits = c(0, 10)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+
+
+```
+### NUTRIENTS and diversity - FIGURE S6
+###from http://joey711.github.io/phyloseq/plot_richness-examples
+```{r fig.height=3, fig.width=5}
+
+### DIVERSITY  & NUTRIENTS
+
+#WATER MASS
+ps_NO3 <- ps[["EEZ_euphotic"]] %>% # select only samples with NO3 data
+  subset_samples(RankNO3 > 0 )
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_EUPHOTIC_Nitrate_watermass_March2021", width = 6, height = 4) 
+    plot_richness(ps_NO3, x="RankNO3",  color="Water_mass.TS1", measures = c("Observed"), title = "Protist EUPHOTIC - Nitrate") + geom_boxplot(alpha= 0.8, outlier.size = 0.2) +
+        geom_point(size = 0.1) +
+        scale_color_manual(values = Water_mass_colors) +
+        theme_bw() +
+        #scale_color_viridis() +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+
+## Box-Plot
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_EUPHOTIC_NITRATE_&_T_watermass2_BOXPLOT_March2021", width = 6, height = 4) 
+plot_richness(ps_NO3, x="RankNO3",  color="Temperature.CTD", measures = c("Observed"), title = "Protist EUPHOTIC - NO3") + 
+      geom_boxplot(alpha= 0.8, outlier.size = 0.2) +      
+      #geom_point(size = 0.1) +
+      #scale_color_manual(values = Water_mass_colors) +
+        geom_point(na.rm = FALSE) +
+        theme_bw() +
+        scale_color_viridis(option = "C") +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+
+```
+
+### CHLA and diversity - Figure S6
+###from http://joey711.github.io/phyloseq/plot_richness-examples
+```{r fig.height=3, fig.width=5}
+
+
+### DIVERSITY  & Chla
+
+ps_Chla <- ps[["EEZ"]] %>% # select only samples with chla data
+  subset_samples(RankChla1 > 0 )
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_EUPHOTIC_Chla_March2021", width = 6, height = 4) 
+    plot_richness(ps_Chla, x="RankChla1",  color="Water_mass.TS1", measures = c("Observed"), title = "Protist EUPHOTIC - Chla") + 
+      geom_boxplot(alpha= 0.8, outlier.size = 0.2) +      
+       # geom_point(size = 0.1) +
+      scale_color_manual(values = Water_mass_colors) +
+        geom_point() +
+        theme_bw() +
+       # scale_color_viridis(option = "C") +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+## Box-Plot
+
+ps_Chla <- ps[["EEZ_euphotic"]] %>% # select only samples with chla data
+  subset_samples(RankChla1 > 0 )
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_EUPHOTIC_RankChla_&_T_watermass2_BOXPLOT_March2021", width = 6, height = 4) 
+
+plot_richness(ps_Chla, x="RankChla1",  color="Temperature.CTD", measures = c("Observed"), title = "Protist EUPHOTIC - Chla") + 
+      geom_boxplot(na.rm = TRUE,alpha= 0.8, outlier.size = 0.2) +      
+      #geom_point(size = 0.1) +
+      #scale_color_manual(values = Water_mass_colors) +
+        geom_point() +
+        theme_bw() +
+        scale_color_viridis(option = "C") +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10)) 
+    
+dev.off()
+
+```
+
+## Ordination - nMDS - Fig. 4 
+###Set colors for plotting
+```{r, fig.height=4, fig.width=4}
+# Set colors for plotting
+Water_mass_colors <- c(
+   "#00688b", "#44c45d","#e0301e")
+# PwC palette for STW
+#coastlines palette for STF
+# Flux palette for SAW
+
+Water_mass_colors <- c(
+   "#00688b", "#44c45d","#e0301e")
+
+Area_colors <- c(
+  "#e0301e","#ffc100", "#00688b","#39ff14" ,"#0befff","#0a5700", "#ff77ff","#708090","#602320")
+
+Area_BoP_colors <- c("#ffc100", "#00688b","#39ff14" ,"#0befff","#0a5700", "#ff77ff","#708090","#602320")
+
+
+Nitrate_colors <- c("#dc6900", "#00688b", "#0befff","#44c45d", "#a32020","#c0c0c0","#00b5e2","#602320")
+
+#1F9C37
+```
+
+##Standardize samples
+
+# Normalize the otu table 
+# Define function - phyloseq_normalize_median
+
+```{r pressure, echo=FALSE}
+
+#PROTIST 
+ps[["EEZ"]] ## All samples
+ps[["EEZ_euphotic"]] ## euphotic samples only
+
+ps_protist_median = median(sample_sums(ps[["EEZ"]]))
+
+normalize_median = function(x, t=ps_protist_median) round(t * (x / sum(x)))
+
+ps_protist_std = transform_sample_counts(ps[["EEZ"]], normalize_median)
+
+# #PROTIST - Syndiniales
+# ps_protist_synd_median = median(sample_sums(ps_protist_synd))
+# normalize_median = function(x, t=ps_protist_synd_median) round(t * (x / sum(x)))
+# ps_protist_synd_std = transform_sample_counts(ps_protist_synd, normalize_median)
+
+```
+
+#Do multivariate analysis based on Bray-Curtis distance and NMDS ordination. - Figure 4
+```{r}
+
+## ALL SAMPLES - 
+
+  intomob123 <-  ps_protist_std
+   #intomob123 <-  ps_protist_synd_std # without syndiniales
+  
+#Ordinate samples - NMDS
+  intomob123.ord <- ordinate(intomob123, "NMDS", "bray")
+  
+##plot NMDS - for all samples colored by water mass -Figure 4 ##
+  
+
+    
+CairoPDF(file = "R.Figures/nMDS/intomob123_EEZ_water_mass.pdf", width = 6, height = 4)
+plot_ordination(intomob123, intomob123.ord, type="samples", color="Water_mass.TS1", shape= "light_layer", title="Samples - Euphotic vs meso- & Bathypelagic") +
+   scale_color_manual(values = Water_mass_colors) +
+    theme_bw()
+
+dev.off()
+
+#####################################################
+#plot NMDS - for all samples colored by light layer
+    CairoPDF(file = "R.Figures/nMDS/intomob123_ALL_light_layer.pdf", width = 6, height = 4)
+plot_ordination(intomob123, intomob123.ord, type="samples", color="light_layer", shape= "Water_mass.TS1", title="Samples - Euphotic vs meso- & Bathypelagic") +
+  
+      theme_bw()
+
+dev.off()
+
+
+
+##plot NMDS - for all samples colored by surface and subsurface ##
+    
+CairoPDF(file = "R.Figures/nMDS/intomob123_EEZ_dens_layer.pdf", width = 6, height = 4)
+plot_ordination(intomob123, intomob123.ord, type="samples", color="dens_layer", shape= "Water_mass.TS1", title="Samples - Surface vs  Sub-surface" ) +
+    theme_bw()
+
+dev.off()
+
+  
+```
+
+## nMDS with EUPHOTIC SAMPLES only - Figure 4
+```{r}
+
+  # EUPHOTIC - Figure 4 ###
+  intomob123_euphotic <-  ps_protist_std %>%  
+  # intomob123_euphotic <-  ps_protist_synd_std %>% # protist without syndiniales
+  subset_samples(light_layer == "Euphotic") 
+
+  #Number of samples 
+  nsamples(intomob123_euphotic)
+  
+  #Ordinate samples - NMDS
+  intomob123_euphotic.ord <- ordinate(intomob123_euphotic, "NMDS", "bray")
+  
+  
+  CairoPDF(file = "R.Figures/nMDS/intomob123_euphotic_area_V2.pdf", width = 6, height = 4)
+  plot_ordination(intomob123_euphotic, intomob123_euphotic.ord, type="samples", color="Water_mass.TS1", shape= "Area2", title="Protist - Euphotic - nMDS - Bray-Curtis", label = "Sample_label_depth") + geom_point(size = 3, alpha = 0.7) +
+scale_shape_manual(values=c(0, 1, 2, 5, 7, 8, 10, 3, 6)) + 
+ scale_color_manual(values = Water_mass_colors) +
+  theme_bw()
+  
+  dev.off()
+  
+  #################################################
+  #plot NMDS - Water masses
+  CairoPDF(file = "R.Figures/nMDS/intomob123_euphotic_watermassTS1.pdf", width = 6, height = 4)
+  plot_ordination(intomob123_euphotic, intomob123_euphotic.ord, type="samples",   color="Water_mass.TS1", title="Protist - Euphotic - nMDS - Bray-Curtis",  label = "Sample_label_depth") + 
+geom_point(size = 3, alpha = 0.7) +
+    theme_bw()
+
+  dev.off()
+
+
+  
+  #plot NMDS - CRUISES
+  CairoPDF(file = "R.Figures/nMDS/intomob123_euphotic_cruise.pdf", width = 10, height = 6)
+  plot_ordination(intomob123_euphotic, intomob123_euphotic.ord, type="samples", color="Cruise.TAN", shape= "Water_mass.TS1", title="Protist - Euphotic - nMDS - Bray-Curtis" ) + geom_point(size = 3, alpha = 0.7)
+  dev.off()
+  
+  # wrapping different water masses
+  
+   title = "Euphotic - Protist - nMDS - Bray-Curtis distance "
+   p = plot_ordination(intomob123_euphotic, intomob123_euphotic.ord, type="samples", color="Cruise.TAN", shape= "Water_mass.TS1") 
+   
+   p = p + geom_point(size = 3, alpha = 0.7) + ggtitle(title)
+   p + facet_wrap(~Water_mass.TS1)
+     
+  
+```
+
+## Test whether the water masses differ significantly from each other using the permutational ANOVA (PERMANOVA) analysis:
+```{r}
+
+  #EUPHOTIC
+ps_protist_median = median(sample_sums(ps[["EEZ_euphotic"]]))
+
+normalize_median = function(x, t=ps_protist_median) round(t * (x / sum(x)))
+
+ps_protist_std = transform_sample_counts(ps[["EEZ_euphotic"]], normalize_median)
+
+   #Distance
+  df = as(sample_data(ps_protist_std), "data.frame")
+  bray_dist = phyloseq::distance(ps_protist_std, method="bray")
+   
+#PERMANOVA - Only continuous - median water column
+  adonis(bray_dist ~ Temperature.CTD + Salinity.CTD + median_NO3 + median_Chla, df)
+
+
+#PERMANOVA -  continuous + Categorical 
+  adonis(bray_dist ~ Water_mass.TS1 + Area2 + Temperature.CTD + Salinity.CTD + median_NO3 + median_Chla, df)
+
+  
+  #PERMANOVA - Only categorical
+  adonis(bray_dist ~ Water_mass.TS1 + Area2 + RankChla1 + dens_layer, df)
+  #adonis(bray_dist ~ dens_layer + ChlaTot + Area2 + Water_mass.TS1, df)
+  
+ 
+ 
+
+
+```
+
+
+
+
+

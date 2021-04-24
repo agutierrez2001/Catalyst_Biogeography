@@ -1,0 +1,426 @@
+---
+title: "DESeq"
+author: "Andres"
+date: "07/08/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Libraries
+
+```{r cars}
+  library(stringr)
+   library(ggplot2)
+   library(dplyr)
+   library(tidyr)
+   library(tibble)
+   library(readr)
+   library(maps)
+   library(glue)
+   library("cowplot")
+   library("treemapify")
+library("Cairo")
+library("cairoDevice")
+   library(phyloseq)
+library("readxl")
+library("openxlsx")
+library("gplots")
+library(forcats)
+library(mgcv)
+library(tidyverse)
+library(DESeq2)
+library(apeglm)
+
+
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("apeglm")
+```
+
+within the document. You can embed an R code chunk like this:
+
+#Load the phyloseq files
+
+```{r pressure, echo=FALSE}
+  
+  #ps <- list()
+  #ps[["all"]] <- readRDS("intomob123_phyloseq_2April2020_RANKED.rds") 
+  
+  ps <- readRDS("intomob123_phyloseq_15March2021_RANKED.rds") 
+  ps
+sample_data(ps)
+```
+
+# Retain seawater samples, and those from voyages for which we have complete metadata
+
+```{r pressure, echo=FALSE}
+ps_sw <-  ps %>%  
+  subset_samples(Sample_Type == "Seawater") %>%
+  #subset_samples((Project != "SOAP" )) %>%
+  #subset_samples((Project != "Bay of Plenty" )) %>%
+  ### Remove SOAP samples until I get metadata complete
+  subset_samples(Water_mass.TS1 != "ANT" ) %>%
+  subset_samples((Sampling_Type != "Blank" )) ### Remove blank samples 
+
+
+```
+
+## ELiminate taxa with zero reads
+```{r cars} 
+ ps_sw <-  ps_sw %>%  
+     filter_taxa(function(x) sum(x) > 0 , TRUE) 
+ ps_sw
+```
+# for PROTISTS
+
+```{r pressure, echo=FALSE}
+  # Remove Metazoa
+  # Remove Fungi
+
+ps_protist <-  ps_sw %>%  
+  subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) 
+```
+
+# for PROTIST -SYNDINALES
+```{r pressure, echo=FALSE}
+  # Remove Metazoa
+  # Remove Fungi
+  # Protist - syndiniales and sarcomonadae
+  
+ps_protist_synd <-  ps_sw %>%  
+        subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) %>%
+      subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+
+get_taxa_unique(ps_protist_synd, "Class")
+
+```
+
+# for PHYTO
+```{r pressure, echo=FALSE}
+
+ps_phyto <-  ps_sw %>%  
+  subset_taxa(!(Division %in% c("Metazoa", "Fungi")))   %>%    
+   subset_taxa(Division %in% c("Chlorophyta", "Dinoflagellata", "Cryptophyta", "Haptophyta", "Ochrophyta", "Cercozoa")) %>%
+   subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+```
+
+## subset samples - EUPHOTIC
+
+```{r pressure, echo=FALSE}
+
+ps_protist_synd_eu <-  ps_protist_synd %>%  
+    subset_samples(light_layer == "Euphotic") 
+```
+
+
+# Agglomerate - 
+# Normalize the otu table 
+# Define function - phyloseq_normalize_median
+
+```{r pressure, echo=FALSE}
+
+# FIRST - agglomerate the sequencing depth normalized OTU table 
+          # ALREADY DONE above 
+
+# Class
+ps_protist_class <- tax_glom(ps_protist_std, taxrank = "Class")
+ps_protist_synd_class <- tax_glom(ps_protist_synd_std, taxrank = "Class")
+
+
+## SECOND - Standardize to relative abundances 
+
+# Protist
+ps_protist_class.rel = transform_sample_counts(ps_protist_class, function(OTU) OTU*100/sum(OTU))
+
+#Protist-synd
+ps_protist_synd_class.rel = transform_sample_counts(ps_protist_synd_class, function(OTU) OTU*100/sum(OTU))
+
+## THIRD - Select TOP20 classes - same as plotted in Class distribution
+
+### OPTION B - select PROTIST-SYND classes of interest based on based on RELATIVE abundance
+protist.class.sum = tapply(taxa_sums(ps_protist_synd_class.rel), tax_table(ps_protist_synd_class.rel)[, "Class"], sum, na.rm=TRUE)
+
+top20class = names(sort(protist.class.sum, TRUE))[1:20]
+
+
+
+```
+
+## subset taxa - classes of interest only for DESeq analysis 
+
+
+```{r pressure, echo=FALSE}
+
+## Subset Classes of interest for DESeq
+
+## OPTION B - same as plotted in Class distribution
+ps_protist_synd_class.top20 = prune_taxa((tax_table(ps_protist_synd_eu)[, "Class"] %in% top20class), ps_protist_synd_eu)
+  ps_protist_synd_class.top20
+  
+Class_names1 = data.frame(Class_reads = sort(taxa_sums(ps_protist_synd_class.top20), TRUE), sorted = 1:ntaxa(ps_protist_synd_class.top20), Class = tax_table(ps_protist_synd_class.top20)[, "Class" ])
+
+## OPTION C - Only the 200 most abundant species
+ species.sum = tapply(taxa_sums(ps_protist_synd_eu), tax_table(ps_protist_synd_eu)[, "Species"], mean, na.rm=TRUE)
+  top200species = names(sort(species.sum, TRUE))[1:200]
+  Top200species = prune_taxa((tax_table(ps_protist_synd_std)[, "Species"] %in% top200species), ps_protist_synd_std)
+  Top200species
+  
+Species_names = data.frame(Species_reads = sort(taxa_sums(Top200species), TRUE), sorted = 1:ntaxa(Top200species), Species = tax_table(Top200species)[, "Species" ])
+
+
+## OPTION A - same as in class distribution
+ps_protist_synd_eu_class <- ps_protist_synd_eu %>%
+   subset_taxa(Class %in% c("Mamiellophyceae", "Dinophyceae", "Chloropicophyceae","Prymnesiophyceae", "Bacillariophyta", "Pelagophyceae", "Prasino-Clade-V", "Cryptophyceae", "Dictyochophyceae", "Choanoflagellatea", "MAST", "Polycystinea", "Acantharea", "RAD-B", "RAD-A", "Spirotrichea" ))
+
+
+```
+
+## DESeq analysis 
+
+## Top20 classes - OTUs
+
+You can also embed plots, for example:
+
+```{r pressure}
+# design formula
+diagdds = phyloseq_to_deseq2(ps_protist_synd_class.top20, ~ Water_mass.TS1)
+# select factors levels  or reference level to compare
+diagdds$Water_mass.TS1 <- factor(diagdds$Water_mass.TS1, levels = c("STW","SAW", "STF")) # select factor levels
+#diagdds$Water_mass.TS1 <- relevel(diagdds$Water_mass.TS1, ref = "STW") # reference level
+
+# calculate geometric means prior to estimate size factors
+gm_mean = function(x, na.rm=TRUE){
+  exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))
+}
+geoMeans = apply(counts(diagdds), 1, gm_mean)
+diagdds = estimateSizeFactors(diagdds, geoMeans = geoMeans)
+diagdds = DESeq(diagdds, fitType="local")
+diagdds = DESeq(diagdds, test="Wald", fitType="parametric")
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+## Investigating the results - Phyloseq comparison between WATER MASSES
+```{r pressure}
+# choose the factor and levels to compare
+resSTW.SAW = results(diagdds, cooksCutoff = FALSE, contrast=c("Water_mass.TS1", "STW", "SAW"), alpha = 0.01) 
+resSTW.STF = results(diagdds, cooksCutoff = FALSE, contrast=c("Water_mass.TS1", "STW", "STF"), alpha = 0.01) 
+resSTF.SAW = results(diagdds, cooksCutoff = FALSE, contrast=c("Water_mass.TS1", "STF", "SAW"), alpha = 0.01)
+
+# resOrdered <- resSTF[order(resSTF$pvalue),] # ordering results based on pvalue
+
+## summary of results
+summary(resSTW.SAW) 
+summary(resSTW.STF) 
+summary(resSTF.SAW) 
+
+# Number of OTUs signifincantly different 
+sum(resSTW.SAW$padj < 0.01, na.rm=TRUE)  
+sum(resSTW.STF$padj < 0.01, na.rm=TRUE) 
+sum(resSTF.SAW$padj < 0.01, na.rm=TRUE) 
+
+
+
+```
+
+## # organizing results in data frame for visualiation WATER MASSES
+```{r pressure}
+
+# STW.SAW
+alpha = 0.01
+sigtab_STW.SAW = resSTW.SAW[which(resSTW.SAW$padj < alpha), ]
+sigtab_STW.SAW = cbind(as(sigtab_STW.SAW, "data.frame"), as(tax_table(ps_protist_synd_eu)[rownames(sigtab_STW.SAW), ], "matrix"))
+
+sigtab_STW.SAW_otu <- sigtab_STW.SAW %>% # otus information
+  rownames_to_column("Otu") %>%
+  unite(Otu_species, Otu, Species, sep = "_", remove = FALSE)
+
+head(sigtab_STW.SAW_otu)
+dim(sigtab_STW.SAW_otu) # dimensions of the data.frame - number of OTUs significantly different
+
+# STW.STF
+alpha = 0.01
+sigtab_STW.STF = resSTW.STF[which(resSTW.STF$padj < alpha), ]
+sigtab_STW.STF = cbind(as(sigtab_STW.STF, "data.frame"), as(tax_table(ps_protist_synd_eu)[rownames(sigtab_STW.STF), ], "matrix"))
+
+sigtab_STW.STF_otu <- sigtab_STW.STF %>% # otus information
+  rownames_to_column("Otu") %>%
+  unite(Otu_species, Otu, Species, sep = "_", remove = FALSE)
+
+head(sigtab_STW.STF)
+dim(sigtab_STW.STF) # dimensions of the data.frame - number of OTUs significantly different
+
+# STF.SAW
+alpha = 0.01
+sigtab_STF.SAW = resSTF.SAW[which(resSTF.SAW$padj < alpha), ]
+sigtab_STF.SAW = cbind(as(sigtab_STF.SAW, "data.frame"), as(tax_table(ps_protist_synd_eu)[rownames(sigtab_STF.SAW), ], "matrix"))
+
+sigtab_STF.SAW_otu <- sigtab_STF.SAW %>% # otus information
+  rownames_to_column("Otu") %>%
+  unite(Otu_species, Otu, Species, sep = "_", remove = FALSE)
+
+head(sigtab_STF.SAW)
+dim(sigtab_STF.SAW) # dimensions of the data.frame - number of OTUs significantly different
+
+```
+
+## VISUALIZING the RESULTS - Phyloseq comparison between WATER MASSES
+
+# Colors for plotting taxonomy - NOT WORKING FOR NOW - WANT TO SET THE SAME COLORS as for Bar plots
+
+```{r pressure, echo=FALSE}
+
+classes_division <- read.table("Color_division.csv", sep=",", header=T, check.names = F, comment.char = "")
+
+classes_division$color_hex_division <-col2hex(classes_division$color_division)
+class_color_division <- structure(as.character(classes_division$color_division),.Names=as.character(classes_division$division))
+
+classes_division$color_hex_class <-col2hex(classes_division$color_class)
+class_color_class <- structure(as.character(classes_division$color_hex_class),.Names=as.character(classes_division$class))
+```
+
+## STW vs SAW
+```{r pressure}
+# theme_set(theme_bw())
+# scale_fill_discrete <- function(palname = "Set1", ...) {
+#     scale_fill_brewer(palette = palname, ...)
+# }
+
+# Division order
+x = tapply(sigtab_STW.SAW$log2FoldChange, sigtab_STW.SAW$Division, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.SAW$Division = factor(as.character(sigtab_STW.SAW$Division), levels=names(x))
+
+# Species order - Single species in each row (including various ASVs with potentially different distributions)
+x = tapply(sigtab_STW.SAW$log2FoldChange, sigtab_STW.SAW$Species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.SAW$Species = factor(as.character(sigtab_STW.SAW$Species), levels=names(x))
+
+# Plotting - species
+ggplot(sigtab_STW.SAW, aes(x=Species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_fill_manual(values = class_color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs SAW - Euphotic - Protist-synd")) +
+  theme_bw() +
+  coord_flip() 
+
+  ggsave("DESeq_euphotic_STW_SAW_species.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+  
+# OTUs order - visualizing otu_species in each row
+x = tapply(sigtab_STW.SAW_otu$log2FoldChange, sigtab_STW.SAW_otu$Otu_species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.SAW_otu$Otu_species = factor(as.character(sigtab_STW.SAW_otu$Otu_species), levels=names(x))
+
+# Plotting - otus
+ggplot(sigtab_STW.SAW_otu, aes(x=Otu_species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_fill_manual(values = class_color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs SAW - Euphotic - Protist-synd")) +
+  theme_bw() +
+  coord_flip() 
+
+  ggsave("DESeq_euphotic_STW_SAW_otus.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+
+```
+
+## STW vs STF
+```{r pressure}
+
+
+# Species order
+x = tapply(sigtab_STW.STF$log2FoldChange, sigtab_STW.STF$Species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.STF$Species = factor(as.character(sigtab_STW.STF$Species), levels=names(x))
+
+# Plotting - species
+ggplot(sigtab_STW.STF, aes(x=Species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_fill_manual(values = class_color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs STF - Euphotic - Protist-synd")) +
+    theme_bw() +
+   coord_flip() 
+
+  ggsave("DESeq_euphotic_STW_STF_species.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+
+# OTUs order - visualizing otu_species in each row
+x = tapply(sigtab_STW.STF_otu$log2FoldChange, sigtab_STW.STF_otu$Otu_species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.STF_otu$Otu_species = factor(as.character(sigtab_STW.STF_otu$Otu_species), levels=names(x))
+
+# Plotting - otus
+ggplot(sigtab_STW.STF_otu, aes(x=Otu_species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_fill_manual(values = class_color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs STF - Euphotic - Protist-synd")) +
+    theme_bw() +
+coord_flip() 
+
+  ggsave("DESeq_euphotic_STW_STF_otu.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+
+```
+
+## STF vs SAW
+```{r pressure}
+
+# Species order
+x = tapply(sigtab_STF.SAW$log2FoldChange, sigtab_STF.SAW$Species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STF.SAW$Species = factor(as.character(sigtab_STF.SAW$Species), levels=names(x))
+
+ggplot(sigtab_STF.SAW, aes(x=Species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_fill_manual(values = class_color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STF vs SAW - Euphotic - Protist-synd")) +
+    theme_bw() +
+coord_flip() 
+
+
+  ggsave("DESeq_euphotic_STF_SAW.pdf", path = "R.Figures/DESeq", dpi = 300, height = 8, width = 8)
+  
+  # OTUs order - visualizing otu_species in each row
+x = tapply(sigtab_STF.SAW_otu$log2FoldChange, sigtab_STF.SAW_otu$Otu_species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STF.SAW_otu$Otu_species = factor(as.character(sigtab_STF.SAW_otu$Otu_species), levels=names(x))
+
+ggplot(sigtab_STF.SAW_otu, aes(x=Otu_species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_fill_manual(values = class_color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STF vs SAW - Euphotic - Protist-synd")) +
+    theme_bw() +
+coord_flip() 
+
+
+  ggsave("DESeq_euphotic_STF_SAW_otu.pdf", path = "R.Figures/DESeq", dpi = 300, height = 8, width = 8)
+
+```
+
+
+
+#########
+## Investigating the results with DESeq vignette
+```{r pressure}
+## log2 fold changes attributable to a given variables
+## Points will be colored red if the adjusted p value is less than 0.1.
+
+res_STWSAW = results(diagdds, cooksCutoff = FALSE,contrast=c("Water_mass.TS1", "STW", "STF"), alpha = 0.05) # choose the factor and levels to compare
+
+plotMA(res, ylim=c(-2,2))
+
+m <-resultsNames(diagdds)
+res
+resLFC <- lfcShrink(diagdds, coef="Water_mass.TS1_STF_vs_SAW", type="apeglm")
+resLFC
+
+
+```
