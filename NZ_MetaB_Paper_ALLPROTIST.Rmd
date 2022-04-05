@@ -1,0 +1,4342 @@
+---
+title: "NZ_MetaB_Paper"
+author: "Andres"
+date: "13/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r libraries, message=FALSE}
+library("phyloseq")
+library("vegan")
+library("ggplot2") 
+library(gplots)
+library("readxl")       # necessary to import the data from Excel file
+library("stringr")
+library("DESeq2")
+library("Rmisc")
+library("dplyr")
+library("tidyr")
+library("openxlsx")
+library("lubridate")
+library("reshape2")
+library("Cairo")
+library("cairoDevice")
+library("hrbrthemes")
+library("viridis")
+library("Cairo")
+library("cairoDevice")
+library(glue)
+library(tidyverse)
+library(data.table)
+library(forcats)
+library(mgcv)
+library(microbiome)
+library(microViz)
+library(DESeq2)
+library(apeglm)
+library(plotrix)
+library("dplyr")        # filter and reformat data frames
+
+
+```
+## Read the data and create phyloseq objects
+
+
+```{r}
+  otu_mat<- read_excel("OTU_table_seawater.xlsx")
+  tax_mat<- read_excel("TAX_table.xlsx")
+   samples_df <- read_excel("Metadata/samples_df_MLD_March2022_RANKED_seawater.xlsx")
+   #samples_df <- read_excel("Metadata/samples_df_MLD_July2020b_RANKED.xlsx")
+  # have to convert tibbles into dataframe because tibbles do not have rownames
+  otu_mat <- as.data.frame(otu_mat)
+  tax_mat <- as.data.frame(tax_mat)
+  samples_df <- as.data.frame(samples_df)
+
+  rownames(samples_df)
+  colnames(otu_mat)
+  
+```
+
+# Phyloseq objects need to have row.names
+# define the row names from the otu column
+
+```{r, warning=FALSE}
+    row.names(otu_mat) <- otu_mat$OTUNumber
+```
+
+# remove the column otu since it is now used as a row name and transform to number
+
+```{r}
+    otu_mat <- otu_mat %>% select (-OTUNumber) 
+
+```
+
+# Idem for the two other matrixes 
+
+```{r, warning=FALSE}
+  row.names(tax_mat) <- tax_mat$OTUNumber
+  tax_mat <- tax_mat %>% select (-OTUNumber) 
+
+  row.names(samples_df) <- samples_df$Sample_ID 
+  
+  samples_df <- samples_df %>% select (-Sample_ID) 
+ 
+  # double checking
+  duplicated(samples_df$Sample_ID) # check for duplicated sample names
+
+  gplots::venn(list(metadata=rownames(samples_df), featuretable=colnames(otu_mat))) # check the Sample ID names in metadata and otu table are the same
+
+```
+
+# Transform into matrixes otu and tax tables (sample table can be left as data frame)
+
+```{r}
+  otu_mat <- as.matrix(otu_mat)
+  tax_mat <- as.matrix(tax_mat)
+  
+  mode(otu_mat) <- "numeric"
+```
+
+Transform to phyloseq objects
+
+```{r}
+  OTU = otu_table(otu_mat, taxa_are_rows = TRUE)
+  TAX = tax_table(tax_mat)
+  samples = sample_data(samples_df)
+  
+  intomob123 <- phyloseq(OTU, TAX, samples)
+   intomob123
+   
+  
+   saveRDS(intomob123,str_c("intomob123_phyloseq_15March2022_RANKED_seawater.rds"))
+
+ ## Identify factors within each variable    
+   sample_variables(intomob123) 
+   unique(get_variable( intomob123, sample_variables( intomob123)[31]))
+
+```  
+
+
+#Load the phyloseq files
+
+```{r pressure, echo=FALSE}
+
+  ps <- list()
+  ps[["all"]] <- readRDS("intomob123_phyloseq_15March2022_RANKED_seawater.rds") 
+  
+```
+  
+
+# Split samples into subsets - Sample types
+
+```{r pressure, echo=FALSE}
+  #Very important, must remove taxa that are not present in one sample set
+  #creating sample_types
+  sample_types = c("Seawater", "Trap", "Sediment")
+  
+  ps[["Seawater"]] <-  ps[["all"]] %>%  
+    subset_samples(Sample_Type == "Seawater")
+  ps[["Trap"]] <-  ps[["all"]] %>%  
+    subset_samples(Sample_Type == "Trap")
+  ps[["Sediment"]] <-  ps[["all"]] %>%  
+   subset_samples(Sample_Type == "Sediment")
+  # 
+  ntaxa(ps[["Seawater"]]) # number of OTUs
+  nsamples(ps[["Seawater"]])
+  sample_sums( ps[["Seawater"]])
+  median(sample_sums( ps[["Seawater"]]))
+  sum(sample_sums( ps[["Seawater"]]))
+  
+```
+
+##Subsampled object - Only seawater samples from EEZ - remove data from Antarctic voyages (ANT)
+```{r}
+
+ps[["EEZ"]] <- subset_samples(ps[["Seawater"]], (Water_mass.TS1 != "ANT" )) ### Remove Samples south of the SAF (from TAN1802 - Except CTD1 deployed in SAF 58.027 S; 174.2135 E)
+
+ps[["EEZ"]] <- subset_samples(ps[["EEZ"]], (Sampling_Type != "Blank" )) ### Remove blanks
+
+
+ntaxa(ps[["EEZ"]]) # number of OTUs
+  nsamples(ps[["EEZ"]])
+  sample_sums( ps[["EEZ"]])
+  sum(sample_sums( ps[["EEZ"]]))
+  median(sample_sums( ps[["EEZ"]]))
+  mean(sample_sums( ps[["EEZ"]]))
+  range(sample_sums(ps[["EEZ"]]))
+   sd(sample_sums(ps[["EEZ"]]))
+   std.error(sample_sums(ps[["EEZ"]]))
+ 
+# Save Phyloseq object only with samples used for this paper
+ 
+ saveRDS(ps[["EEZ"]],str_c("NZ_EEZ_MetaB_Paper.rds"))
+
+## Extract dataframe for metadata from ps
+
+metadata_df <- data.frame(sample_data(ps[["EEZ"]])) %>%
+      rownames_to_column(var = "file_code")
+ 
+ write.xlsx(metadata_df, "Metadata/Tables/metadata_extracted_from_ps.xlsx")
+
+```
+
+# Filtration based on Taxonomy - for Protist
+
+```{r pressure, echo=FALSE}
+ 
+## ALL euk
+ps[["EEZ-euk"]] <- ps[["EEZ"]] 
+
+ ntaxa(ps[["EEZ-euk"]]) # number of OTUs
+  nsamples(ps[["EEZ-euk"]])
+  sample_sums( ps[["EEZ-euk"]])
+   median(sample_sums( ps[["EEZ-euk"]]))
+   range(sample_sums(ps[["EEZ-euk"]]))
+   sd(sample_sums(ps[["EEZ-euk"]]))
+   std.error(sample_sums(ps[["EEZ-euk"]]))
+   print(ps[["EEZ-euk"]] )
+   
+
+## Protist (Remove Metazoa & Fungi)
+ps[["EEZ"]] <- ps[["EEZ"]] %>% 
+        subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) 
+
+  ntaxa(ps[["EEZ"]]) # number of OTUs
+  nsamples(ps[["EEZ"]])
+  sample_sums( ps[["EEZ"]])
+   median(sample_sums( ps[["EEZ"]]))
+   range(sample_sums(ps[["EEZ"]]))
+   sd(sample_sums(ps[["EEZ"]]))
+   std.error(sample_sums(ps[["EEZ"]]))
+   print(ps[["EEZ"]] )
+      
+## Protist - syndiniales and sarcomonadae
+  ps[["EEZ-synd"]] <- ps[["EEZ"]] %>% 
+        subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) %>%
+      subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+  
+   ntaxa(ps[["EEZ"]]) # number of OTUs
+  nsamples(ps[["EEZ"]])
+  sample_sums( ps[["EEZ"]])
+   median(sample_sums( ps[["EEZ"]]))
+   range(sample_sums(ps[["EEZ"]]))
+   sd(sample_sums(ps[["EEZ"]]))
+   std.error(sample_sums(ps[["EEZ"]]))
+   print(ps[["EEZ"]] )
+  
+# ## Phyto
+#   ps[["EEZ-phyto"]] <- ps[["EEZ"]] %>%
+#         subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) %>%
+#         subset_taxa(Division %in% c("Chlorophyta", "Dinoflagellata", "Cryptophyta", "Haptophyta", "Ochrophyta", "Cercozoa")) %>%
+#         subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+
+get_taxa_unique(ps[["EEZ-euk"]], "Supergroup")
+
+```
+
+# Number of sequenced filter for euk, protist, protist-synd
+
+```{r pressure, echo=FALSE}
+
+   ps_euk <- ps[["EEZ-euk"]]
+   ps_protist <- ps[["EEZ"]]
+   ps_protist_synd <- ps[["EEZ-synd"]]
+   
+   Nseq_euk <-    sum(sample_sums(ps_euk))
+   Nseq_protist <-    sum(sample_sums(ps_protist))
+   Nseq_protist_synd <-    sum(sample_sums(ps_protist_synd))
+   
+```
+
+# Split SEAWATER samples into subsets - Water_mass.TS1
+# Number of sequences/per sample; Ntotal ASVs; N Samples 
+```{r pressure, echo=FALSE}
+  #Very important, must remove taxa that are not present in one sample set
+  
+#creating sample_types
+  Water_mass.TS1 = c("EEZ","STW", "STF", "SAW")
+
+    ps[["EEZ"]] <-  ps[["EEZ"]] 
+    
+    ps[["STW"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Water_mass.TS1 == "STW")
+ 
+    ps[["STF"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Water_mass.TS1 == "STF")
+  
+    ps[["SAW"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Water_mass.TS1 == "SAW")
+
+ # Median number of reads in samples across different water masses
+  for (one_sample_type in Water_mass.TS1) {
+    
+    
+      nnn <- median(sample_sums(ps[[one_sample_type]])  )
+        xxx <- mean(sample_sums( ps[[one_sample_type]]))
+  yyy <- range(sample_sums(ps[[one_sample_type]]))
+   zzz <- sd(sample_sums(ps[[one_sample_type]]))
+   rrr <- std.error(sample_sums(ps[[one_sample_type]]))
+   www <-  median(ntaxa(ps[[one_sample_type]])  )
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(nnn)
+      print(yyy)
+      print(xxx)
+      print(zzz)
+      print(rrr)
+      print(www)
+
+      
+      
+      cat("============================\n")
+      
+  }
+  
+  # Remove ASVs that are not present in the dataset
+  for (one_sample_type in Water_mass.TS1) {
+
+      ps[[one_sample_type]] <- ps[[one_sample_type]] %>%
+        filter_taxa(function(x) sum(x) > 0 , TRUE)
+      
+     
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(ps[[one_sample_type]] )
+      cat("============================\n")
+      
+  }
+```
+# Creating lists for some specific cases - WATER MASSES - EUPHOTIC
+
+
+```{r pressure, echo=FALSE}
+ water_mass_euphotic= c("EEZ_euphotic","STW_euphotic", "STF_euphotic", "SAW_euphotic")
+
+ps[["EEZ_euphotic"]] <-  ps[["EEZ"]] %>%  subset_samples(light_layer== "1-Euphotic")
+
+ps[["STW_euphotic"]] <-  ps[["STW"]] %>%  subset_samples(light_layer== "1-Euphotic") 
+
+ps[["STF_euphotic"]] <-  ps[["STF"]] %>%  subset_samples(light_layer== "1-Euphotic") 
+
+ps[["SAW_euphotic"]] <-  ps[["SAW"]] %>%  subset_samples(light_layer== "1-Euphotic") 
+
+
+for (one_sample_type in water_mass_euphotic) {
+
+      
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(ps[[one_sample_type]] )
+      cat("============================\n")
+      
+}
+
+```
+# Creating lists for some specific cases - WATER MASSES - APHOTIC
+
+
+```{r pressure, echo=FALSE}
+ water_mass_aphotic= c("EEZ_aphotic","STW_aphotic", "STF_aphotic", "SAW_aphotic")
+
+ps[["EEZ_aphotic"]] <-  ps[["EEZ"]] %>%  subset_samples(light_layer== "2-Aphotic")
+
+ps[["STW_aphotic"]] <-  ps[["STW"]] %>%  subset_samples(light_layer== "2-Aphotic") 
+
+ps[["STF_aphotic"]] <-  ps[["STF"]] %>%  subset_samples(light_layer== "2-Aphotic") 
+
+ps[["SAW_aphotic"]] <-  ps[["SAW"]] %>%  subset_samples(light_layer== "2-Aphotic") 
+
+
+for (one_sample_type in water_mass_aphotic) {
+
+      
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(ps[[one_sample_type]] )
+      cat("============================\n")
+      
+}
+
+```
+
+<
+### Richness and Diversity 
+
+
+### Estimate richness data frame - Without a threshold of ASV abundance
+```{r, fig.height=4, fig.width=8}
+
+richness <- estimate_richness(ps[["EEZ"]],  measures = NULL)
+setDT(richness, keep.rownames = "Sample_ID")
+# dont know why the '-' in the rownames are changed into '.' 
+
+richness$Sample_ID <- chartr(".", "-", richness$Sample_ID) # changed the naming back so it can be joined with sample_ID from medadata
+
+metadata <- read_excel("Metadata/samples_df_MLD_March2022_RANKED_seawater.xlsx")
+
+metadata_richness <- left_join(metadata, richness, by = "Sample_ID" )
+
+write.xlsx(metadata_richness, file = "PrismFigures/Richness_table.xlsx")
+write.xlsx(richness, file = "PrismFigures/Richness.xlsx")
+
+```
+
+
+### Estimate richness data frame - Establishing a threshold of ASV abundance
+```{r, fig.height=4, fig.width=8}
+
+EEZfiltered = filter_taxa(ps[["EEZ"]], function(x) sum(x) > 10, TRUE)
+
+richness_EEZfiltered <- estimate_richness(EEZfiltered,  measures = NULL)
+setDT(richness_EEZfiltered, keep.rownames = "Sample_ID")
+# dont know why the '-' in the rownames are changed into '.' 
+
+richness_EEZfiltered$Sample_ID <- chartr(".", "-", richness_EEZfiltered$Sample_ID) # changed the naming back so it can be joined with sample_ID from medadata
+
+metadata_EEZfiltered <- read_excel("Metadata/samples_df_MLD_July2020_RANKED_seawater.xlsx")
+
+metadata_richness_EEZfiltered <- left_join(metadata_EEZfiltered, richness_EEZfiltered, by = "Sample_ID" )
+
+write.xlsx(metadata_richness_EEZfiltered, file = "PrismFigures/Richness_EEZfiltered_table.xlsx")
+write.xlsx(metadata_EEZfiltered, file = "PrismFigures/Richness_EEZfiltered.xlsx")
+
+```
+
+### Richness & metadata dataframes for different group of samples
+```{r, fig.height=4, fig.width=8}
+
+# All samples 
+
+all_metadata_richness <- metadata_richness %>%
+  select("Area_U_Cast_Depth1", "Latitude.CTD","Temperature.CTD", "Salinity.CTD", "ChlaTot", "DRSi", "NO3", "DRP", median_NO3:Fisher)
+
+write.xlsx(all_metadata_richness, file = "PrismFigures/all_metadata_richness.xlsx")
+
+# Euphotic samples
+
+euphotic_metadata_richness <- metadata_richness %>%
+  filter(light_layer == "1-Euphotic") %>%
+    select("Area_U_Cast_Depth1", "Latitude.CTD","Temperature.CTD", "Salinity.CTD", "ChlaTot", "DRSi", "NO3", "DRP", median_NO3:Fisher)
+
+write.xlsx(euphotic_metadata_richness, file = "PrismFigures/euphotic_metadata_richness.xlsx")
+
+# Aphotic samples
+
+Aphotic_metadata_richness <- metadata_richness %>%
+  filter(light_layer == "2-Aphotic") %>%
+   select("Area_U_Cast_Depth1", "Latitude.CTD","Temperature.CTD", "Salinity.CTD", "ChlaTot", "DRSi", "NO3", "DRP", median_NO3:Fisher)
+
+write.xlsx(Aphotic_metadata_richness, file = "PrismFigures/Aphotic_metadata_richness.xlsx")
+
+# Mixed-Layer samples
+
+MLD_metadata_richness <- metadata_richness %>%
+  filter(dens_layer == "surface") %>%
+    select("Area_U_Cast_Depth1", "Latitude.CTD","Temperature.CTD", "Salinity.CTD", "ChlaTot", "DRSi", "NO3", "DRP", median_NO3:Fisher)
+
+write.xlsx(MLD_metadata_richness, file = "PrismFigures/MLD_metadata_richness.xlsx")
+
+```
+
+### Richness vs metadata relationships
+```{r, fig.height=4, fig.width=8}
+
+## Linear regressions - to be ran when completed metadata table
+  
+  ggplot(metadata_richness, aes(Temperature.CTD, Observed)) +
+  geom_point() +
+  stat_smooth(method = lm)
+  
+  model <- lm(Observed ~ Temperature.CTD, data = metadata_richness)
+
+  summary(model)
+  
+  
+## Richness relationships
+
+  CairoPDF(file = "R.Figures/Richness/Richness_samples.pdf", width = 12, height = 4) 
+  metadata_richness %>%
+    ggplot(aes(x = Sample_label , y = Observed, color = Water_mass.TS1)) +
+        geom_point(shape = 21, stroke = 0.5, size = 2) +
+        #geom_smooth(aes(col=Water_mass.TS1), method = "loess",  formula = y ~ x, se=TRUE, linetype=2, size = 0.25) +
+   geom_smooth(method = "loess",  formula = y ~ x^1/2, se=TRUE, linetype=2, size = 0.25) +
+        theme_bw() + ggtitle("Richness - samples") +
+        xlab("Chla (mg Chla / m3)")+ ylab("Richness") +
+        theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+        theme(axis.text.x = element_text(hjust = 1, size = 14)) +
+        theme(axis.text.y = element_text(size = 14)) +
+        theme(strip.text = element_text(size = 12)) +
+       facet_wrap(~Water_mass.TS1, scales =  "free_x") 
+        #facet_grid(cols = vars(Water_mass.TS1), rows = vars(Class), scales =  "free_y")
+
+  dev.off()
+  
+
+
+```
+
+###Set colors for plotting
+```{r, fig.height=4, fig.width=4}
+# Set colors for plotting
+Water_mass_colors <- c(
+   "#00688b", "#44c45d","#e0301e")
+# PwC palette for STW
+#coastlines palette for STF
+# Flux palette for SAW
+Area_colors <- c(
+  "#e0301e","#ffc100", "#00688b","#39ff14" ,"#0befff","#0a5700", "#ff77ff","#708090","#602320")
+
+Nitrate_colors <- c("#dc6900", "#00688b", "#0befff","#44c45d", "#a32020","#c0c0c0","#00b5e2","#602320")
+
+light_colors1 <- c(  "#00688b", "#f79d0c")
+light_colors2 <- c(  "#00688b","#0a0500")
+
+Season_colors <-c("#287537", "#0b5394", "#e69138")
+
+
+```
+
+#### WATER MASS  & AREA DIVERSITY
+
+## EUPHOTIC - Water mass - FIGURE 3
+
+### FIGURE 3A and 3B
+```{r fig.height=5, fig.width=10}
+# Use euphotic or all (euphotic + aphotic)
+ps[["EEZ_euphotic"]] 
+ps[["EEZ"]]
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_ALL_Water.Mass_March2021", width = 10, height = 5) 
+    plot_richness( ps[["EEZ"]], x="Water_mass.TS1", color="Water_mass.TS1", measures = c("Observed","Shannon"), title = "Protist ALL") + geom_boxplot(alpha= 0.8, outlier.size = 0.2, position=position_dodge(.9)) +
+        geom_point(size = 0.1) +
+          scale_color_manual(values = Water_mass_colors) +
+        theme_bw() +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+
+
+## AREA
+#CairoPDF(file = "R.Figures/Richness/Protist.Diversity_ALL_Area2_March2021", width = 10, height = 5) 
+   p <- plot_richness( ps[["EEZ"]], x="Water_mass.TS1", color="Area2", measures = c("Observed","Shannon"), title = "Protist ALL") + geom_boxplot(alpha= 0.8, outlier.size = 0.4, position=position_dodge(.9)) +
+        geom_point(size = 0.1) +
+          scale_color_manual(values = Area_colors) +
+        theme_bw() +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+#dev.off()
+
+p
+p$layers <- p$layers[-1]
+p
+p$layers <- p$layers[-2]
+p
+
+
+ggsave("Protist.Diversity_ALL_Area2_March2022.pdf", path = "R.Figures/Richness/", dpi = 300,  width = 10, height = 5)
+
+```
+
+## BPM EUPHOTIC and APHOTIC - Water mass - FIGURE 3 + or SUPPL. FIGURE
+### FIGURE 3C
+```{r fig.height=5, fig.width=10}
+# Use euphotic or all (euphotic + aphotic)
+
+ps[["EEZ_BPM_euphotic"]] <- ps[["EEZ"]] %>%
+  subset_samples(Project == "BiophysMoorings") %>%
+  subset_samples(light_layer== "1-Euphotic")
+  
+ps[["EEZ_BPM_Aphotic"]] <- ps[["EEZ"]] %>%
+  subset_samples(Project == "BiophysMoorings") %>%
+  subset_samples(light_layer== "2-Aphotic")
+
+ps[["EEZ_BPM"]] <- ps[["EEZ"]] %>%
+  subset_samples(Project == "BiophysMoorings") 
+
+## BPM Euphotic ##
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_BPM_Euphotic_March2021", width = 10, height = 5) 
+    plot_richness( ps[["EEZ_BPM_euphotic"]], x="Water_mass.TS1", color="Water_mass.TS1", measures = c("Observed","Shannon"), title = "Protist ALL - BPM_euphotic") + geom_boxplot(alpha= 0.8, outlier.size = 0.2, position=position_dodge(.9)) +
+        geom_point(size = 0.1) +
+          scale_color_manual(values = Water_mass_colors) +
+        theme_bw() +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+## BMP - APHOTIC
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_BPM_Aphotic_March2021", width = 10, height = 5) 
+    plot_richness( ps[["EEZ_BPM_Aphotic"]], x="Water_mass.TS1", color="Water_mass.TS1", measures = c("Observed","Shannon"), title = "Protist ALL - BPM_Aphotic") + geom_boxplot(alpha= 0.8, outlier.size = 0.2, position=position_dodge(.9)) +
+        geom_point(size = 0.1) +
+          scale_color_manual(values = Water_mass_colors) +
+        theme_bw() +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+## BMP - Both together EUPHOTIC & APHOTIC
+
+
+#CairoPDF(file = "R.Figures/Richness/Protist.Diversity_BPM_EU_APHOTIC_March2022", width = 10, height = 5) 
+    r <- plot_richness( ps[["EEZ_BPM"]], x="Water_mass.TS1", color="light_layer", measures = c("Observed","Shannon"), title = "Protist ALL - BPM") + geom_boxplot(alpha= 0.8, outlier.size = 0.2, position=position_dodge(.9)) +
+        geom_point(size = 0.1) +
+          scale_color_manual(values = light_colors2) +
+        theme_bw() +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+
+  #dev.off()
+
+r
+r$layers <- p$layers[-1]
+r
+r$layers <- p$layers[-2]
+r
+
+ggsave("Protist.Diversity_BPM_EU_APHOTIC_March2022.pdf", path = "R.Figures/Richness/", dpi = 300,  width = 10, height = 5)
+
+```
+
+## BPM EUPHOTIC - SEASONAL - FIGURE 3 + or SUPPL. FIGURE
+### FIGURE 3D
+```{r fig.height=5, fig.width=10}
+# Use euphotic or all (euphotic + aphotic)
+
+ps[["EEZ_BPM_euphotic"]] <- ps[["EEZ"]] %>%
+  subset_samples(Project == "BiophysMoorings") %>%
+  subset_samples(light_layer== "1-Euphotic")
+  
+
+## BPM Euphotic - SEASONAL ##
+
+#CairoPDF(file = "R.Figures/Richness/Protist.Diversity_BPM_Euphotic_SEASONAL_March2021", width = 10, height = 5) 
+   v <-  plot_richness( ps[["EEZ_BPM_euphotic"]], x="Water_mass.TS1", color="Season", measures = c("Observed","Shannon"), title = "Protist ALL - BPM_euphotic - SEASONAL") + geom_boxplot(alpha= 0.8, outlier.size = 0.2, position=position_dodge(.9)) +
+        geom_point(size = 0.1) +
+          scale_color_manual(values = Season_colors) +
+        theme_bw() +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+#dev.off()
+
+v
+v$layers <- p$layers[-1]
+v
+v$layers <- p$layers[-2]
+v
+
+ggsave("Protist.Diversity_BPM_Euphotic_SEASONAL_March2022.pdf", path = "R.Figures/Richness/", dpi = 300,  width = 10, height = 5)
+
+```
+
+## RAREFACTION TO COMPARE APHOTIC vs PHOTIC
+```{r fig.height=5, fig.width=10}
+
+library('phyloseq')
+
+psdata <- ps[["EEZ_BPM"]]
+psdata
+sample_sums(psdata)
+
+
+set.seed(42)
+
+calculate_rarefaction_curves <- function(psdata, measures, depths) {
+  require('plyr') # ldply
+  require('reshape2') # melt
+
+  estimate_rarified_richness <- function(psdata, measures, depth) {
+    if(max(sample_sums(psdata)) < depth) return()
+    psdata <- prune_samples(sample_sums(psdata) >= depth, psdata)
+
+    rarified_psdata <- rarefy_even_depth(psdata, depth, verbose = FALSE)
+
+    alpha_diversity <- estimate_richness(rarified_psdata, measures = measures)
+
+    # as.matrix forces the use of melt.array, which includes the Sample names (rownames)
+    molten_alpha_diversity <- melt(as.matrix(alpha_diversity), varnames = c('Sample', 'Measure'), value.name = 'Alpha_diversity')
+
+    molten_alpha_diversity
+  }
+
+  names(depths) <- depths # this enables automatic addition of the Depth to the output by ldply
+  rarefaction_curve_data <- ldply(depths, estimate_rarified_richness, psdata = psdata, measures = measures, .id = 'SeqDepth', .progress = ifelse(interactive(), 'text', 'none'))
+
+  # convert Depth from factor to numeric
+  rarefaction_curve_data$SeqDepth <- as.numeric(levels(rarefaction_curve_data$SeqDepth))[rarefaction_curve_data$SeqDepth]
+
+  rarefaction_curve_data
+}
+
+rarefaction_curve_data <- calculate_rarefaction_curves(psdata, c('Observed', 'Shannon'), rep(c(1, 10, 100, 1000, 1:100 * 10000), each = 10))
+summary(rarefaction_curve_data)
+
+
+```
+
+#Summarize alpha diversity
+
+```{r fig.height=5, fig.width=10}
+
+rarefaction_curve_data_summary <- ddply(rarefaction_curve_data, c('SeqDepth', 'Sample', 'Measure'), summarise, Alpha_diversity_mean = mean(Alpha_diversity), Alpha_diversity_sd = sd(Alpha_diversity))
+
+```
+#Add sample data
+
+```{r fig.height=5, fig.width=10}
+
+rarefaction_curve_data_summary_verbose <- merge(rarefaction_curve_data_summary, data.frame(sample_data(psdata)), by.x = 'Sample', by.y = 'row.names')
+
+```
+
+
+# Plot
+
+```{r fig.height=5, fig.width=10}
+
+ library('ggplot2')
+
+ggplot(
+  data = rarefaction_curve_data_summary_verbose,
+  mapping = aes(
+    x = SeqDepth,
+    y = Alpha_diversity_mean,
+    ymin = Alpha_diversity_mean - Alpha_diversity_sd,
+    ymax = Alpha_diversity_mean + Alpha_diversity_sd,
+    colour = light_layer,
+    group = Sample)) +
+    geom_line() + 
+    scale_color_manual(values = light_colors2) +
+    geom_pointrange() + 
+    facet_wrap( facets = Measure~Water_mass.TS1 , scales = 'free_y')
+
+ggsave("Rarefaction_BPM_March2022.pdf", path = "R.Figures/Richness", dpi = 300,  width = 10, height = 6, scale=1.2)
+```
+
+# Median sequencing depth at BPM sites
+```{r fig.height=5, fig.width=10}
+
+  # BPM
+  median(sample_sums( ps[["EEZ_BPM"]]))
+  mean(sample_sums( ps[["EEZ_BPM"]]))
+  
+  #Bio-SAM
+  ps[["EEZ_Bio_SAM"]] <- ps[["EEZ_BPM"]] %>%
+    subset_samples(Water_mass.TS1 == "SAW")
+  median(sample_sums( ps[["EEZ_Bio_SAM"]]))
+  mean(sample_sums( ps[["EEZ_Bio_SAM"]]))
+  
+  #Bio-STF
+  ps[["EEZ_Bio_STF"]] <- ps[["EEZ_BPM"]] %>%
+    subset_samples(Water_mass.TS1 == "STF")
+  median(sample_sums( ps[["EEZ_Bio_STF"]]))
+  mean(sample_sums( ps[["EEZ_Bio_STF"]]))
+  
+   #Bio-STM
+  ps[["EEZ_Bio_STM"]] <- ps[["EEZ_BPM"]] %>%
+    subset_samples(Water_mass.TS1 == "STW")
+  median(sample_sums( ps[["EEZ_Bio_STM"]]))
+  mean(sample_sums( ps[["EEZ_Bio_STM"]]))
+
+
+```
+
+## LAtitude and diversity - ALL or EUPHOTIC and S5 MERGED
+# from http://joey711.github.io/phyloseq/plot_richness-examples
+
+### FIGURE S4 
+```{r fig.height=3, fig.width=5}
+
+ps[["EEZ_euphotic"]] 
+ps[["EEZ"]]
+
+## Water mass - EEZ - Ranked latitude
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_EUPHOTIC_Latitude1_watermass_March2022", width = 10, height = 5) 
+    z <- plot_richness(ps[["EEZ_euphotic"]], x=as.character("RankLat1"), color="Water_mass.TS1", measures = c("Observed","Shannon"), title = "Protist EUPHOTIC - Latitude") + geom_boxplot(alpha= 0.8, outlier.size = 0.2) +
+                scale_color_manual(values = Water_mass_colors) +
+        geom_point(size = 0.1) +
+        theme_bw() +
+        #scale_x_continuous(limits = c(0, 10)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+    
+    z
+z$layers <- z$layers[-1]
+z
+z$layers <- z$layers[-2]
+z
+
+ggsave("Protist.Diversity_EUPHOTIC_Latitude1_watermass_March2022.pdf", path = "R.Figures/Richness/", dpi = 300,  width = 10, height = 5)
+
+##Area -boxplot - EEZ - Ranked latitude
+
+#CairoPDF(file = "R.Figures/Richness/Protist.Diversity_EUPHOTIC_Latitude1_Area2_March2022", width = 10, height = 5) 
+
+  t <- plot_richness(ps[["EEZ_euphotic"]], x="RankLat1", color="Area2", measures = c("Observed","Shannon"), title = "Protist all - Euphotic - Latitude") + geom_boxplot(alpha= 0.8, outlier.size = 0.2) +
+                scale_color_manual(values = Area_colors) +
+        geom_point(size = 0.1) +
+        theme_bw() +
+        #scale_x_continuous(limits = c(0, 10)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+
+  
+      t
+t$layers <- t$layers[-1]
+t
+t$layers <- t$layers[-2]
+t
+
+ggsave("Protist.Diversity_EUPHOTIC_Latitude1_Area2_March2022.pdf", path = "R.Figures/Richness/", dpi = 300,  width = 10, height = 5)
+
+## Continuous Lat - ALL or EUPHOTIC - color scaled with Temperature
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_Euphotic_Latitude_T_continuous_March2021", width = 10, height = 5) 
+    plot_richness(ps[["EEZ_euphotic"]], x="Latitude.CTD", color="Temperature.CTD", measures = c("Observed","Shannon"), title = "Protist all  - Euphotic - Latitude") + geom_point(size = 0.1) +
+        #scale_color_manual(values = Area_colors) +
+        scale_color_viridis(option = "C") + 
+        geom_point(size = 0.1) +
+        theme_bw() +
+        #scale_x_continuous(limits = c(0, 10)) +
+        scale_x_continuous(breaks = c(-35, -40, -45, -50, -55)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+```
+
+
+### FIGURE S4 
+```{r fig.height=3, fig.width=5}
+
+ps[["EEZ_euphotic"]] 
+ps[["EEZ"]]
+
+ps[["EEZ_euphotic_chla_no3"]]  <- ps[["EEZ_euphotic"]]  %>%
+  subset_samples((Cruise.TAN != "KAH1303" )) %>%
+  subset_samples((Cruise.TAN != "TAN1204" )) %>%
+  subset_samples((Cruise.TAN != "TAN1203" )) %>%
+  subset_samples((U_Cast != "7802" ))
+
+
+## NITRATE -boxplot - EEZ - Ranked latitude - WATER MASSES
+
+
+    s <- plot_richness(ps[["EEZ_euphotic_chla_no3"]], x=as.character("RankNO3"), color="Water_mass.TS1", measures = c("Observed","Shannon"), title = "Protist EUPHOTIC - Nitrate") + geom_boxplot(alpha= 0.8, outlier.size = 0.2) +
+                scale_color_manual(values = Water_mass_colors) +
+        geom_point(size = 0.1) +
+        theme_bw() +
+        #scale_x_continuous(limits = c(0, 10)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+    
+    s
+s$layers <- s$layers[-1]
+s
+s$layers <- s$layers[-2]
+s
+
+ggsave("Protist.Diversity_EUPHOTIC_NITRATE_watermass_March2022.pdf", path = "R.Figures/Richness/", dpi = 300,  width = 10, height = 5)
+
+## CHLA -boxplot - EEZ - Ranked latitude - WATER MASSES
+
+#CairoPDF(file = "R.Figures/Richness/Protist.Diversity_EUPHOTIC_Latitude1_Area2_March2022", width = 10, height = 5) 
+
+  t <- plot_richness(ps[["EEZ_euphotic_chla_no3"]], x="RankChla1", color="Area2", measures = c("Observed","Shannon"), title = "Protist all - Euphotic - Chla") + geom_boxplot(alpha= 0.8, outlier.size = 0.2) +
+                scale_color_manual(values = Area_colors) +
+        geom_point(size = 0.1) +
+        theme_bw() +
+        #scale_x_continuous(limits = c(0, 10)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+
+  
+      t
+t$layers <- t$layers[-1]
+t
+t$layers <- t$layers[-2]
+t
+
+ggsave("Protist.Diversity_EUPHOTIC_CHLA_Area2_March2022.pdf", path = "R.Figures/Richness/", dpi = 300,  width = 10, height = 5)
+
+
+
+```
+
+### FIGURE S5 
+```{r fig.height=3, fig.width=5}
+
+ps[["EEZ_euphotic"]] 
+ps[["EEZ"]]
+
+## Continuous Temperature - ALL or EUPHOTIC - color coded by water mass or Region
+
+# Water mass - FIGURE S5A
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_EUPHOTIC_T_continuous_Watermass_March2021", width = 10, height = 5) 
+    plot_richness(ps[["EEZ_euphotic"]], x="Temperature.CTD", color="Water_mass.TS1", measures = c("Observed","Shannon"), title = "Protist all - Euphotic - Latitude") + geom_point(size = 0.1) +
+        scale_color_manual(values = Water_mass_colors) +
+        #scale_color_viridis(option = "C") + 
+        geom_point(size = 0.1) +
+        theme_bw() +
+        #scale_x_continuous(limits = c(0, 10)) +
+        #scale_x_continuous(breaks = c(-35, -40, -45, -50, -55)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+# Region - FIGURE S5B
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_EUPHOTIC_T_continuous_Area2_March2021", width = 10, height = 5) 
+    plot_richness(ps[["EEZ_euphotic"]], x="Temperature.CTD", color="Area2", measures = c("Observed","Shannon"), title = "Protist all - Euphotic - Latitude") + geom_point(size = 0.1) +
+        scale_color_manual(values = Area_colors) +
+        #scale_color_viridis(option = "C") + 
+        geom_point(size = 0.1) +
+        theme_bw() +
+        #scale_x_continuous(limits = c(0, 10)) +
+        #scale_x_continuous(breaks = c(-35, -40, -45, -50, -55)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+```
+
+### FIGURE S5C - SEASONALITY - 
+```{r fig.height=3, fig.width=5}
+
+ps[["EEZ_euphotic"]] 
+ps[["EEZ"]]
+
+ps[["EEZ_BPM_euphotic"]] 
+
+## DATE - ALL or EUPHOTIC - color coded by water mass or Region
+
+# Water mass - FIGURE S5A
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_EUPHOTIC_SEASONAL_continuous_Watermass_March2021", width = 10, height = 5) 
+    plot_richness(ps[["EEZ_BPM_euphotic"]], x="Julian", color="Water_mass.TS1", measures = c("Observed","Shannon"), title = "Protist all - Euphotic - Latitude") + geom_point(size = 0.1) +
+        scale_color_manual(values = Water_mass_colors) +
+        #scale_color_viridis(option = "C") + 
+        geom_point(size = 0.1) +
+        theme_bw() +
+        #scale_x_continuous(limits = c(0, 10)) +
+        #scale_x_continuous(breaks = c(-35, -40, -45, -50, -55)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+# Region - FIGURE S5B
+
+CairoPDF(file = "R.Figures/Richness/Protist.Diversity_EUPHOTIC_T_continuous_Area2_March2021", width = 10, height = 5) 
+    plot_richness(ps[["EEZ_euphotic"]], x="Temperature.CTD", color="Area2", measures = c("Observed","Shannon"), title = "Protist all - Euphotic - Latitude") + geom_point(size = 0.1) +
+        scale_color_manual(values = Area_colors) +
+        #scale_color_viridis(option = "C") + 
+        geom_point(size = 0.1) +
+        theme_bw() +
+        #scale_x_continuous(limits = c(0, 10)) +
+        #scale_x_continuous(breaks = c(-35, -40, -45, -50, -55)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12))   +
+        theme(legend.title = element_text(color = "blue", size = 12), legend.text = element_text(color = "black", size = 10))
+dev.off()
+
+```
+
+## PCA ordination ##
+
+## ALL 
+### SUPPLEMENTARY FIGURE S7A
+```{r pressure, echo=FALSE}
+# perform PCA ordination
+unconstrained_PCA <-
+ ps[["EEZ-synd"]]  %>%
+   #subset_samples(light_layer == "Euphotic") %>%
+  #tax_filter(min_prevalence = 0.1, tax_level = "Genus") %>%
+  #tax_agg("Genus") %>%
+  tax_transform("clr") %>%
+  ord_calc(method = "PCA") 
+#> Proportional min_prevalence given: 0.1 --> min 23/222 samples.
+# ord_calc will automatically infer you want a "PCA" here
+# specify explicitly with method = "PCA", or you can pick another method
+
+# create plot
+pca_plot <- unconstrained_PCA %>%
+  ord_plot(
+    #plot_taxa = 1:20, 
+    colour = "light_layer", size = 2, shape = "Water_mass.TS1",
+    tax_vec_length = 2,
+    auto_caption = TRUE
+  )
+
+# customise plot
+customised_plot <- pca_plot +
+  #stat_ellipse(aes(linetype = Water_mass.TS1, colour = Water_mass.TS1)) +
+  #scale_colour_brewer(palette = "Set1") +
+  scale_color_manual(values = light_colors1) 
+ # theme(legend.position = "bottom") 
+
+
+# show plot
+customised_plot
+
+ggsave("PCA_unconstrained_ALL_PROTIST_SYND_March2021.pdf", path = "R.Figures/MicroViz", dpi = 300,  width = 6, height = 4, scale=1.2)
+
+```
+
+## ALL (PROTIST INCLUDING SYNDINIALES - new potential version)
+### SUPPLEMENTARY 
+### FIGURE S7A
+```{r pressure, echo=FALSE}
+# perform PCA ordination
+unconstrained_PCA_protist <-
+ ps[["EEZ"]]  %>%
+   #subset_samples(light_layer == "Euphotic") %>%
+  #tax_filter(min_prevalence = 0.1, tax_level = "Genus") %>%
+  #tax_agg("Genus") %>%
+  tax_transform("clr") %>%
+  ord_calc(method = "PCA") 
+#> Proportional min_prevalence given: 0.1 --> min 23/222 samples.
+# ord_calc will automatically infer you want a "PCA" here
+# specify explicitly with method = "PCA", or you can pick another method
+
+# create plot
+pca_plot_protist <- unconstrained_PCA_protist %>%
+  ord_plot(
+    #plot_taxa = 1:20, 
+    colour = "light_layer", size = 2, shape = "Water_mass.TS1",
+    tax_vec_length = 2,
+    auto_caption = TRUE
+  )
+
+# customise plot
+customised_plot_protist <- pca_plot_protist +
+  #stat_ellipse(aes(linetype = Water_mass.TS1, colour = Water_mass.TS1)) +
+  #scale_colour_brewer(palette = "Set1") +
+  scale_color_manual(values = light_colors1) 
+ # theme(legend.position = "bottom") 
+
+
+# show plot
+customised_plot_protist
+
+ggsave("PCA_unconstrained_ALL_PROTIST_March2022.pdf", path = "R.Figures/MicroViz", dpi = 300,  width = 6, height = 4, scale=1.2)
+
+```
+
+## Euphotic ## 
+### SUPPLEMENTARY FIGURE - NOT INCLUDED IN THE FINAL VERSION OF THE PAPER
+## PROTIST - SYND
+```{r pressure, echo=FALSE}
+# perform PCA ordination
+unconstrained_PCA_euphotic <-
+ ps[["EEZ-synd"]] %>%
+   subset_samples(light_layer == "Euphotic") %>%
+  #tax_filter(min_prevalence = 0.1, tax_level = "Genus") %>%
+  tax_agg("Genus") %>%
+  tax_transform("clr") %>%
+  ord_calc(method = "PCA") 
+#> Proportional min_prevalence given: 0.1 --> min 23/222 samples.
+# ord_calc will automatically infer you want a "PCA" here
+# specify explicitly with method = "PCA", or you can pick another method
+
+# create plot
+pca_plot_euphotic <- unconstrained_PCA_euphotic %>%
+  ord_plot(
+    #plot_taxa = 1:12, 
+    colour = "Water_mass.TS1", size = 2, shape = "Area2",
+    tax_vec_length = 2,
+    auto_caption = TRUE
+  )
+
+# customise plot
+customised_plot_euphotic <- pca_plot_euphotic +
+  #stat_ellipse(aes(linetype = Water_mass.TS1, colour = Water_mass.TS1)) +
+  #scale_colour_brewer(palette = "Set1") +
+  scale_color_manual(values = Water_mass_colors) +
+  scale_shape_manual(values=c(0, 1, 2, 5, 7, 8, 10, 3, 6)) 
+
+ # theme(legend.position = "bottom") 
+
+
+# show plot
+customised_plot_euphotic
+
+ggsave("PCA_unconstrained_EUPHOTIC_PROTIST_SYND_March2022.pdf", path = "R.Figures/MicroViz", dpi = 300,  width = 6, height = 4, scale=1.2)
+
+```
+
+### SUPPLEMENTARY FIGURE - NOT INCLUDED IN THE FINAL VERSION OF THE PAPER
+# PROTIST ALL
+```{r pressure, echo=FALSE}
+# perform PCA ordination
+unconstrained_PCA_euphotic_protist <-
+ ps[["EEZ"]] %>%
+   subset_samples(light_layer == "Euphotic") %>%
+  #tax_filter(min_prevalence = 0.1, tax_level = "Genus") %>%
+  tax_agg("Genus") %>%
+  tax_transform("clr") %>%
+  ord_calc(method = "PCA") 
+#> Proportional min_prevalence given: 0.1 --> min 23/222 samples.
+# ord_calc will automatically infer you want a "PCA" here
+# specify explicitly with method = "PCA", or you can pick another method
+
+# create plot
+pca_plot_euphotic_protist <- unconstrained_PCA_euphotic_protist %>%
+  ord_plot(
+    #plot_taxa = 1:12, 
+    colour = "Water_mass.TS1", size = 2, shape = "Area2",
+    tax_vec_length = 2,
+    auto_caption = TRUE
+  )
+
+# customise plot
+customised_plot_euphotic_protist <- pca_plot_euphotic_protist +
+  #stat_ellipse(aes(linetype = Water_mass.TS1, colour = Water_mass.TS1)) +
+  #scale_colour_brewer(palette = "Set1") +
+  scale_color_manual(values = Water_mass_colors) +
+  scale_shape_manual(values=c(0, 1, 2, 5, 7, 8, 10, 3, 6)) 
+
+ # theme(legend.position = "bottom") 
+
+
+# show plot
+customised_plot_euphotic_protist
+
+ggsave("FigS7_PCA_unconstrained_EUPHOTIC_PROTIST_March2022.pdf", path = "R.Figures/MicroViz", dpi = 300,  width = 6, height = 4, scale=1.2)
+
+```
+
+## EUPHOTIC
+## PCA ordination - PROTIST - SYND
+### Figure 4A
+```{r pressure, echo=FALSE}
+# perform RDA ordination
+unconstrained_PCA_RDA <-
+  ps[["EEZ-synd"]] %>%
+   subset_samples(light_layer == "Euphotic") %>%
+  #tax_filter(min_prevalence = 0.1, tax_level = "Genus") %>%
+  tax_agg("Genus") %>%
+  tax_transform("clr") %>%
+  ord_calc(method = "PCA") 
+#> Proportional min_prevalence given: 0.1 --> min 23/222 samples.
+# ord_calc will automatically infer you want a "PCA" here
+# specify explicitly with method = "PCA", or you can pick another method
+
+# create plot
+rda_plot <- unconstrained_PCA_RDA %>%
+  ord_plot(
+    #plot_taxa = 1:10, 
+    colour = "Water_mass.TS1", size = 2, shape = "Area2",
+    tax_vec_length = 3,
+    auto_caption = TRUE
+  )
+
+# customise plot
+customised_plot_rda <- rda_plot +
+  stat_ellipse(aes(linetype = Water_mass.TS1, colour = Water_mass.TS1)) +
+  #scale_colour_brewer(palette = "Set1") +
+  scale_color_manual(values = Water_mass_colors) +
+  scale_shape_manual(values=c(0, 1, 2, 5, 7, 8, 10, 3, 6)) 
+ # theme(legend.position = "bottom") 
+
+
+# show plot
+customised_plot_rda
+
+ggsave("PCA_unconstrained_EUPHOTIC_PROTIST-SYND_March2022.pdf", path = "R.Figures/MicroViz", dpi = 300,  width = 6, height = 4, scale=1.2)
+
+```
+
+
+## EUPHOTIC
+## PCA ordination - PROTIST - ALL
+### Figure 4A
+```{r pressure, echo=FALSE}
+# perform RDA ordination
+unconstrained_PCA_RDA_protist <-
+  ps[["EEZ"]] %>%
+   subset_samples(light_layer == "Euphotic") %>%
+  #tax_filter(min_prevalence = 0.1, tax_level = "Genus") %>%
+  tax_agg("Genus") %>%
+  tax_transform("clr") %>%
+  ord_calc(method = "PCA") 
+#> Proportional min_prevalence given: 0.1 --> min 23/222 samples.
+# ord_calc will automatically infer you want a "PCA" here
+# specify explicitly with method = "PCA", or you can pick another method
+
+# create plot
+rda_plot_protist <- unconstrained_PCA_RDA_protist %>%
+  ord_plot(
+    #plot_taxa = 1:10, 
+    colour = "Water_mass.TS1", size = 2, shape = "Area2",
+    tax_vec_length = 3,
+    auto_caption = TRUE
+  )
+
+# customise plot
+customised_plot_rda_protist <- rda_plot_protist +
+  stat_ellipse(aes(linetype = Water_mass.TS1, colour = Water_mass.TS1)) +
+  #scale_colour_brewer(palette = "Set1") +
+  scale_color_manual(values = Water_mass_colors) +
+  scale_shape_manual(values=c(0, 1, 2, 5, 7, 8, 10, 3, 6)) 
+ # theme(legend.position = "bottom") 
+
+
+# show plot
+customised_plot_rda_protist
+
+ggsave("PCA_unconstrained_EUPHOTIC_PROTIST_March2022.pdf", path = "R.Figures/MicroViz", dpi = 300,  width = 6, height = 4, scale=1.2)
+
+```
+
+## CONSTRAINED Ordination + PERMANOVA - PROTIST - SYND
+### FIGURE 4B
+```{r pressure, echo=FALSE}
+Bray_dists <-
+ ps[["EEZ-synd"]] %>%
+   subset_samples(light_layer == "Euphotic") %>%
+  #tax_filter(min_prevalence = 0.1, tax_level = "Genus") %>%
+  #tax_agg("Genus") %>%
+  tax_transform("identity") %>%
+  dist_calc("bray")
+#> Proportional min_prevalence given: 0.1 --> min 23/222 samples.
+
+perm2 <- dist_permanova(data = Bray_dists, variables = c("Salinity.CTD", "Temperature.CTD" ,"median_NO3", "median_Chla"), seed = 321)
+# Dropping samples with missings: 81
+# 2021-05-03 17:04:42 - Starting PERMANOVA with 999 perms with 1 processes
+
+perm_get(perm2) # Permutation test for adonis under reduced model
+
+ord_calc(perm2, constraints = c("Salinity.CTD","Temperature.CTD", "median_NO3","median_Chla")) %>%
+  ord_plot(
+    colour = "Water_mass.TS1", size = 2, shape = "Area2",
+    constraint_vec_style = list(colour = "black", size = 1.15),
+    constraint_lab_style = list(colour = "black")
+  ) +
+  stat_ellipse(aes(colour = Water_mass.TS1)) + 
+  # scale_color_brewer(palette = "Dark2") +
+  scale_color_manual(values = Water_mass_colors) +
+  # scale_shape_manual(values=c(0, 1, 2, 5, 7, 8, 10, 3, 6)) 
+  scale_shape_manual(values=c(1, 2, 5, 7, 8, 10, 3, 6)) 
+
+
+#> 
+#> Centering (mean) and scaling (sd) the constraints and conditions:
+#>  weight
+#>  female
+#,"MLD0.2C"
+#, "MLD0.2C"
+
+
+ggsave("RDA_Bray_contrained_EUPHOTIC_PROTIST_SYND_TSal_Chla_NO3_March2022.pdf", path = "R.Figures/MicroViz", dpi = 300,  width = 6, height = 4, scale=1.2)
+
+```
+
+## CONSTRAINED Ordination + PERMANOVA - PROTIST ALL
+### FIGURE 4B
+```{r pressure, echo=FALSE}
+Bray_dists_protist <-
+ ps[["EEZ"]] %>%
+   subset_samples(light_layer == "Euphotic") %>%
+  #tax_filter(min_prevalence = 0.1, tax_level = "Genus") %>%
+  #tax_agg("Genus") %>%
+  tax_transform("identity") %>%
+  dist_calc("bray")
+#> Proportional min_prevalence given: 0.1 --> min 23/222 samples.
+
+perm2_protist <- dist_permanova(data = Bray_dists_protist, variables = c("Salinity.CTD", "Temperature.CTD" ,"median_NO3", "median_Chla"), seed = 321)
+# Dropping samples with missings: 81
+# 2021-05-03 17:04:42 - Starting PERMANOVA with 999 perms with 1 processes
+
+perm_get(perm2_protist) # Permutation test for adonis under reduced model
+
+ord_calc(perm2_protist, constraints = c("Salinity.CTD","Temperature.CTD", "median_NO3","median_Chla")) %>%
+  ord_plot(
+    colour = "Water_mass.TS1", size = 2, shape = "Area2",
+    constraint_vec_style = list(colour = "black", size = 1.15),
+    constraint_lab_style = list(colour = "black")
+  ) +
+  stat_ellipse(aes(colour = Water_mass.TS1)) + 
+  # scale_color_brewer(palette = "Dark2") +
+  scale_color_manual(values = Water_mass_colors) +
+# scale_shape_manual(values=c(0, 1, 2, 5, 7, 8, 10, 3, 6)) 
+  scale_shape_manual(values=c(1, 2, 5, 7, 8, 10, 3, 6)) 
+#> 
+#> Centering (mean) and scaling (sd) the constraints and conditions:
+#>  weight
+#>  female
+#,"MLD0.2C"
+#, "MLD0.2C"
+
+
+ggsave("RDA_Bray_contrained_EUPHOTIC_PROTIST_TSal_Chla_NO3_March2022.pdf", path = "R.Figures/MicroViz", dpi = 300,  width = 6, height = 4, scale=1.2)
+
+```
+
+## Test whether the water masses differ significantly from each other using the permutational ANOVA (PERMANOVA) analysis:
+
+# PROTIST - SYND --- MARCH 2022
+```{r}
+
+#EUPHOTIC
+ps_protist_synd_euphotic <-  ps[["EEZ-synd"]] %>%
+  subset_samples(( light_layer == "Euphotic" ))
+
+  # REMOVE samples that lack environmental variables of interest for the PERMANOVA
+  # Bay of Plenty and TAN1204 Biophysical moorings voyage, TAN1203 SOAP, day 1 of TAN1212 
+
+ps_protist_synd_perm <- ps_protist_synd_euphotic %>%
+  subset_samples((Cruise.TAN != "KAH1303" )) %>%
+  subset_samples((Cruise.TAN != "TAN1204" )) %>%
+  subset_samples((Cruise.TAN != "TAN1203" )) %>%
+  subset_samples((U_Cast != "7802" ))
+
+
+   #Distance
+  df = as(sample_data(ps_protist_synd_perm), "data.frame")
+  bray_dist = phyloseq::distance(ps_protist_synd_perm, method="bray")
+   
+    #PERMANOVA - Only categorical
+  adonis(bray_dist ~ Water_mass.TS1 + Area2 + RankChla1 + dens_layer, df)
+  #adonis(bray_dist ~ dens_layer + ChlaTot + Area2 + Water_mass.TS1, df)
+  
+  #PERMANOVA - Only continuous - median water column
+  adonis(bray_dist ~ Temperature.CTD + Salinity.CTD + median_NO3 + median_Chla, df)
+  
+    #PERMANOVA -  continuous + Categorical 
+  adonis(bray_dist ~ Water_mass.TS1 + Area2 + Temperature.CTD + Salinity.CTD + median_NO3 + median_Chla, df)
+
+
+
+```
+
+# PROTIST - ALL --- MARCH 2022
+```{r}
+
+#EUPHOTIC
+ps_protist_euphotic <-  ps[["EEZ"]] %>%
+  subset_samples(( light_layer == "Euphotic" ))
+
+  # REMOVE samples that lack environmental variables of interest for the PERMANOVA
+  # Bay of Plenty and TAN1204 Biophysical moorings voyage, TAN1203 SOAP, day 1 of TAN1212 
+
+ps_protist_perm <- ps_protist_euphotic %>%
+  subset_samples((Cruise.TAN != "KAH1303" )) %>%
+  subset_samples((Cruise.TAN != "TAN1204" )) %>%
+  subset_samples((Cruise.TAN != "TAN1203" )) %>%
+  subset_samples((U_Cast != "7802" ))
+
+
+   #Distance
+  df = as(sample_data(ps_protist_perm), "data.frame")
+  bray_dist = phyloseq::distance(ps_protist_perm, method="bray")
+   
+    #PERMANOVA - Only categorical
+  adonis(bray_dist ~ Water_mass.TS1 + Area2 + RankChla1 + dens_layer, df)
+  #adonis(bray_dist ~ dens_layer + ChlaTot + Area2 + Water_mass.TS1, df)
+  
+  #PERMANOVA - Only continuous - median water column
+  adonis(bray_dist ~ Temperature.CTD + Salinity.CTD + median_NO3 + median_Chla, df)
+  
+    #PERMANOVA -  continuous + Categorical 
+  adonis(bray_dist ~ Water_mass.TS1 + Area2 + Temperature.CTD + Salinity.CTD + median_NO3 + median_Chla, df)
+
+```
+
+
+## RELATIVE ABUUNDANCE BAR PLOTS - CLASSES
+## SYNDINIALES EXCLUDED
+
+# for PROTIST -SYNDINALES
+```{r pressure, echo=FALSE}
+  # Remove Metazoa
+  # Remove Fungi
+  # Protist - syndiniales and sarcomonadae
+  
+ps_protist_synd <-   ps[["EEZ-synd"]] 
+ps_protist <-   ps[["EEZ"]] 
+ps_euk <- ps[["EEZ-euk"]] 
+
+get_taxa_unique(ps_protist_synd, "Class")
+get_taxa_unique(ps_protist, "Class")
+
+
+```
+
+# Colors for plotting taxonomy
+
+```{r pressure, echo=FALSE}
+
+classes_division <- read.table("Color_division.csv", sep=",", header=T, check.names = F, comment.char = "")
+
+classes_division$color_hex_division <-col2hex(classes_division$color_division)
+class_color_division <- structure(as.character(classes_division$color_division),.Names=as.character(classes_division$division))
+
+classes_division$color_hex_class <-col2hex(classes_division$color_class)
+class_color_class <- structure(as.character(classes_division$color_hex_class),.Names=as.character(classes_division$class))
+```
+
+
+# Normalize the otu table - NORMALIZED READ ABUNDANCES
+# Define function - phyloseq_normalize_median
+
+```{r pressure, echo=FALSE}
+
+## Standardize abundances to the median sequencing depth
+
+#PROTIST-SYND
+ps_protist_synd_median = median(sample_sums(ps_protist_synd))
+normalize_protist_synd_median = function(x, t=ps_protist_synd_median) round(t * (x / sum(x)))
+ps_protist_synd_std = transform_sample_counts(ps_protist_synd, normalize_protist_synd_median)
+
+
+#PROTIST WITH SYNDINIALES
+ps_protist_median = median(sample_sums(ps_protist))
+normalize_protist_median = function(x, t=ps_protist_median) round(t * (x / sum(x)))
+ps_protist_std = transform_sample_counts(ps_protist, normalize_protist_median)
+
+
+```
+
+## Agglomerate reads into CLASSES only 30 more normalized abundant classes
+# SYNDINALES EXCLUDED
+
+```{r pressure, echo=FALSE}
+
+
+# CLASS
+ps_protist_synd_class <- tax_glom(ps_protist_synd_std, taxrank = "Class")
+
+plot(sort(taxa_sums(ps_protist_synd_class), TRUE) )
+get_taxa_unique(ps_protist_synd_class, "Class")
+
+### Top30 - most abundant classes
+ synd_class.sum = tapply(taxa_sums(ps_protist_synd_class), tax_table(ps_protist_synd_class)[, "Class"], sum, na.rm=TRUE)
+  top30class_synd = names(sort(synd_class.sum, TRUE))[1:30]
+  Top30class_synd = prune_taxa((tax_table(ps_protist_synd_class)[, "Class"] %in% top30class_synd), ps_protist_synd_class)
+  Top30class_synd
+  
+Class_names_synd = data.frame(Class_reads = sort(taxa_sums(Top30class_synd), TRUE), sorted = 1:ntaxa(Top30class_synd), Class = tax_table(Top30class_synd)[, "Class" ])
+
+write.xlsx(Class_names_synd , file = "Tables/Top30_Class_SYND_read_abundance_sw_March2022.xlsx")
+
+saveRDS(ps_protist_synd_class,str_c("intomob123_phyloseq_15March2021_RANKED_CLASS_SYND_AGGLOM_March2022.rds"))
+
+```
+
+# PROTIST ALL - WITH SYNDINALES 
+
+```{r pressure, echo=FALSE}
+
+
+# CLASS
+ps_protist_class <- tax_glom(ps_protist_std, taxrank = "Class")
+
+plot(sort(taxa_sums(ps_protist_class), TRUE) )
+get_taxa_unique(ps_protist_class, "Class")
+
+### Top30 - most abundant classes
+ class.sum_protist = tapply(taxa_sums(ps_protist_class), tax_table(ps_protist_class)[, "Class"], sum, na.rm=TRUE)
+  top30class_protist = names(sort(class.sum_protist, TRUE))[1:30]
+  Top30class_protist = prune_taxa((tax_table(ps_protist_class)[, "Class"] %in% top30class_protist), ps_protist_class)
+  Top30class_protist
+  
+Class_names_protist = data.frame(Class_reads = sort(taxa_sums(Top30class_protist), TRUE), sorted = 1:ntaxa(Top30class_protist), Class = tax_table(Top30class_protist)[, "Class" ])
+
+write.xlsx(Class_names_protist , file = "Tables/Top30_Protist_Class_read_abundance_sw_March2022.xlsx")
+
+saveRDS(ps_protist_class,str_c("intomob123_phyloseq_15March2021_RANKED_PROTIST_CLASS_AGGLOM.rds"))
+
+```
+
+## ANALYSIS OF RELATIVE ABUNDANCES - %
+##Calculate statistics of group specific relative abundances 
+
+## PROTIST-SYND EXCLUDED - CLASS
+
+
+```{r pressure, echo=FALSE}
+
+# # First - 
+# ## Standardize abundances to the median sequencing depth
+# 
+# #PROTIST-SYND
+# ps_protist_synd_median = median(sample_sums(ps_protist_synd))
+# normalize_protist_synd_median = function(x, t=ps_protist_synd_median) round(t * (x / sum(x)))
+# ps_protist_synd_std = transform_sample_counts(ps_protist_synd, normalize_protist_synd_median)
+
+## Second - agglomerate the sequencing depth normalized OTU table 
+          
+ps_protist_synd_class <- tax_glom(ps_protist_synd_class, taxrank = "Class")
+
+## Third - Standardize to relative abundances 
+
+ps_protist_synd_class.rel = transform_sample_counts(ps_protist_synd_class, function(OTU) OTU*100/sum(OTU))
+
+## Select TOP20 classes - select PROTIST-SYND classes of interest based on based on RELATIVE abundance
+
+protist_synd.class.sum = tapply(taxa_sums(ps_protist_synd_class.rel), tax_table(ps_protist_synd_class.rel)[, "Class"], sum, na.rm=TRUE)
+
+top20class_synd = names(sort(protist_synd.class.sum, TRUE))[1:20]
+
+ps_protist_synd_class.top20 = prune_taxa((tax_table(ps_protist_synd_class.rel)[, "Class"] %in% top20class_synd), ps_protist_synd_class.rel)
+  ps_protist_synd_class.top20
+  
+Class_names1 = data.frame(Class_reads = sort(taxa_sums(ps_protist_synd_class.top20), TRUE), sorted = 1:ntaxa(ps_protist_synd_class.top20), Class = tax_table(ps_protist_synd_class.top20)[, "Class" ])
+
+```
+## PROTIST ALL - CLASS
+
+
+```{r pressure, echo=FALSE}
+
+# # First - 
+# ## Standardize abundances to the median sequencing depth
+# 
+# #PROTIST-SYND
+# ps_protist_synd_median = median(sample_sums(ps_protist_synd))
+# normalize_protist_synd_median = function(x, t=ps_protist_synd_median) round(t * (x / sum(x)))
+# ps_protist_synd_std = transform_sample_counts(ps_protist_synd, normalize_protist_synd_median)
+
+## Second - agglomerate the sequencing depth normalized OTU table 
+          
+ps_protist_class <- tax_glom(ps_protist_class, taxrank = "Class")
+
+## Third - Standardize to relative abundances 
+
+ps_protist_class.rel = transform_sample_counts(ps_protist_class, function(OTU) OTU*100/sum(OTU))
+
+## Select TOP20 classes - select PROTIST-SYND classes of interest based on based on RELATIVE abundance
+
+protist.class.sum = tapply(taxa_sums(ps_protist_class.rel), tax_table(ps_protist_class.rel)[, "Class"], sum, na.rm=TRUE)
+
+top20class.protist = names(sort(protist.class.sum, TRUE))[1:20]
+
+ps_protist_class.top20 = prune_taxa((tax_table(ps_protist_class.rel)[, "Class"] %in% top20class.protist), ps_protist_class.rel)
+  ps_protist_class.top20
+  
+Class_names1 = data.frame(Class_reads = sort(taxa_sums(ps_protist_class.top20), TRUE), sorted = 1:ntaxa(ps_protist_class.top20), Class = tax_table(ps_protist_class.top20)[, "Class" ])
+
+```
+
+## Make LONG FORMAT dataframe for plotting
+
+## PROTIST-SYND EXCLUDED - CLASS
+
+```{r pressure, echo=FALSE}
+
+## dataframe for plotting
+otu_df <- as.data.frame(ps_protist_synd_class.top20@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      #filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+taxo_df <- as.data.frame(ps_protist_synd_class.top20@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+otu_df <- left_join(taxo_df, otu_df)
+metadata_df <- data.frame(sample_data(ps_protist_synd_class.top20)) %>%
+      rownames_to_column(var = "file_code")
+otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+
+df_protist_synd_class.rel <-left_join(otu_df, classes_division, by=c("Class"= "class"))
+df_protist_synd_class.rel <- df_protist_synd_class.rel %>%
+      mutate(pico_pct = Chla_02*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(nano_pct = Chla_2*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(micro_pct = Chla_20*100/(Chla_02 + Chla_2 + Chla_20))
+    
+    # write.xlsx(df_protist_synd_class.rel, file = "Tables/df_protist_synd_class.rel.xlsx")
+
+```
+
+## PROTIST ALL - SYNDINIALES INCLUDED - CLASS
+
+```{r pressure, echo=FALSE}
+
+## dataframe for plotting
+otu_df <- as.data.frame(ps_protist_class.top20@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      #filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+taxo_df <- as.data.frame(ps_protist_class.top20@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+otu_df <- left_join(taxo_df, otu_df)
+metadata_df <- data.frame(sample_data(ps_protist_class.top20)) %>%
+      rownames_to_column(var = "file_code")
+otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+
+df_protist_class.rel <-left_join(otu_df, classes_division, by=c("Class"= "class"))
+df_protist_class.rel <- df_protist_class.rel %>%
+      mutate(pico_pct = Chla_02*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(nano_pct = Chla_2*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(micro_pct = Chla_20*100/(Chla_02 + Chla_2 + Chla_20))
+    
+     write.xlsx(df_protist_class.rel, file = "Tables/df_protist_ALL_class.rel.STATION.xlsx")
+
+```
+
+## Summary mean and sd relative abundance of classes in different TOTAL and in WATER MASSES 
+
+### PROTIST - SYND EXCLUDED
+
+### TOTAL DATASET EEZ - EUPHOTIC  - CLASS
+```{r, fig.height=4, fig.width=6}
+
+# FILTER ONLY EUPHOTIC
+## NOTE: Problem with group_by does not seem to operate properly. 
+## Solved by reloading dplyr after plyr
+class_df_protist_synd_stat_total <-  df_protist_synd_class.rel %>%
+    filter(light_layer == "Euphotic") %>% ### surface values
+    group_by(Class) %>% 
+    add_tally() %>%
+    summarise(median = median(n_reads, na.rm = FALSE), mean=mean(n_reads, na.rm = FALSE), sd=sd(n_reads, na.rm = FALSE), n=mean(n, na.rm = FALSE)) # we want to account for zero values as well
+
+ class_df_protist_synd_stat_total <- class_df_protist_synd_stat_total %>%
+  arrange( -mean) 
+
+write.xlsx(class_df_protist_synd_stat_total, file = "Tables/Protist_synd_euphotic_top20_CLASS_REL_STATS_CLASSES_March2022.xlsx")
+
+## BAR PLOT - Figure 5A
+# color coding # Water mass - SUM
+class_df_protist_synd_stat_total_col <-left_join(class_df_protist_synd_stat_total, classes_division, by=c("Class"= "class")) # join for colors
+
+color_class <- as.character(class_df_protist_synd_stat_total_col$color_hex_class)
+names(color_class) <- as.character(class_df_protist_synd_stat_total_col$Class)
+class_df_protist_synd_stat_total_col$Class = with(class_df_protist_synd_stat_total_col, reorder(Class, -mean))
+
+CairoPDF(file = "R.Figures/Bar/Protist_synd_euphotic_top20_CLASS_REL_STATS_CLASSES_March2022_Fig_5A.pdf", width = 8, height = 6)
+  ggplot(class_df_protist_synd_stat_total_col, aes(x=Class, y=mean, fill=Class)) +
+    geom_bar(stat="identity", width = 0.9) +
+    scale_fill_manual(values = color_class) +
+    xlab("") +
+    theme_bw() +
+    #theme(aspect.ratio = 2/1) +
+    ggtitle(paste ("Protist - Euphotic - MEAN")) + 
+    geom_errorbar(aes(ymin = mean, ymax = mean+sd), size = 0.1, width = 0.1) +
+    theme(axis.text.x=element_text(angle = 45, hjust = 1, size=6)) +
+    theme(axis.text.y=element_text(angle = 0, hjust = 1, size=6)) +
+    theme(panel.grid.major = element_line(size = 0.1, linetype = 'solid',
+                                colour = "grey"), 
+    panel.grid.minor = element_line(size = 0.05, linetype = 'solid',
+                                colour = "grey")) +
+    theme(axis.ticks = element_line(colour = "black", size = 0.1)) +
+    xlab("") + 
+    ylab("% Relative abundance") +
+    ylim(0, 60)
+dev.off()
+
+
+```
+
+## Plotting BOX-PLOTS of groups STANDARDIZED abundance in different areas and environmental ranks 
+
+
+```{r pressure, echo=FALSE}
+
+
+### Top20 - most abundant classes
+ class.sum_synd = tapply(taxa_sums(ps_protist_synd_class), tax_table(ps_protist_synd_class)[, "Class"], sum, na.rm=TRUE)
+  top20class_synd = names(sort(class.sum_synd, TRUE))[1:20]
+  ps_protist_synd_class.top20.abund = prune_taxa((tax_table(ps_protist_synd_class)[, "Class"] %in% top20class_synd), ps_protist_synd_class)
+  ps_protist_class.top20.abund
+  
+Class_names = data.frame(Class_reads = sort(taxa_sums(ps_protist_synd_class.top20.abund), TRUE), sorted = 1:ntaxa(ps_protist_synd_class.top20.abund), Class = tax_table(ps_protist_synd_class.top20.abund)[, "Class" ])
+
+write.xlsx(Class_names , file = "Tables/Top20_Class_synd_read_abundance_sw_March2022.xlsx")
+
+
+
+```
+
+
+## Make LONG FORMAT dataframe for plotting
+
+```{r pressure, echo=FALSE}
+
+## dataframe for plotting -- Look into standardizes or relative abundances
+otu_df <- as.data.frame(ps_protist_synd_class.top20.abund@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      #filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+taxo_df <- as.data.frame(ps_protist_synd_class.top20.abund@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+    otu_df <- left_join(taxo_df, otu_df)
+
+    metadata_df <- data.frame(sample_data(ps_protist_synd_class.top20.abund)) %>%
+      rownames_to_column(var = "file_code")
+
+    otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+    
+    class_df_protist_synd.abund <-left_join(otu_df, classes_division, by=c("Class"= "class"))
+    class_df_protist_synd.abund <- class_df_protist_synd.abund %>%
+      mutate(pico_pct = Chla_02*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(nano_pct = Chla_2*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(micro_pct = Chla_20*100/(Chla_02 + Chla_2 + Chla_20))
+    
+    # write.xlsx(class_df_protist_synd.abund, file = "Tables/class_df_protist_synd_abund.xlsx")
+
+      
+```
+###Set colors for plotting
+```{r, fig.height=4, fig.width=4}
+# Set colors for plotting
+Water_mass_colors <- c(
+   "#00688b", "#44c45d","#e0301e")
+# PwC palette for STW
+#coastlines palette for STF
+# Flux palette for SAW
+Area_colors <- c(
+  "#e0301e","#ffc100", "#00688b","#39ff14" ,"#0befff","#0a5700", "#ff77ff","#708090","#602320")
+
+Area_BoP_colors <- c("#ffc100", "#00688b","#39ff14" ,"#0befff","#0a5700", "#ff77ff","#708090","#602320") # if Bay of Plenty is left out
+
+Nitrate_colors <- c("#dc6900", "#00688b", "#0befff","#44c45d", "#a32020","#c0c0c0","#00b5e2","#602320")
+
+light_colors <- c(  "#00688b", "#f79d0c")
+
+```
+
+## FIGURE 6 - Water masses
+
+```{r, fig.height=6, fig.width=6}
+
+## WATER MASSES - Figure 6
+
+# I would like to organize the group specific plots from more to less abundant but I don't know yet how to do this using facet-wrap 
+
+  
+  CairoPDF(file = "R.Figures/BoxPlot/Protist_Synd_Abundance_EUPHOTIC_Water_masses_March2022.pdf", width = 14, height = 8) 
+  
+  class_df_protist_synd.abund %>%
+  filter(light_layer == "Euphotic") %>%
+  
+ggplot(aes(x = Water_mass.TS1 , y = n_reads,  fill(Water_mass.TS1), color = Water_mass.TS1)) +
+        #geom_point(size = 1) +
+       geom_boxplot(outlier.shape = NA) + 
+        #geom_boxplot() +
+      geom_jitter(size = 0.8, width = 0.2, alpha = 0.2) +
+        #scale_x_continuous(limits = c(0, 10)) +
+        #ylim(-100, 0) +
+        scale_color_manual(values = Water_mass_colors) +
+       # geom_errorbar(aes(ymin = mean-sd, ymax = mean+sd), size = 0.1, width = 0.1) +
+        theme_bw() + ggtitle("Class - EUPHOTIC zone PROTIST-SYND normalized read abundance in Water.masses") +
+        xlab("Water_mass.TS1")+ ylab("standardized read abundance") +
+        theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+        theme(axis.text.x = element_text(hjust = 1, size = 12)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        facet_wrap(~Class, scales = "free_y")
+  dev.off()
+
+```
+### FIGURE S15 - Regions
+
+```{r, fig.height=6, fig.width=6}
+
+  
+    ### AREAS ## - Figure S6
+## reorder areas ##
+  
+CairoPDF(file = "R.Figures/BoxPlot/Protist_Synd_Abundance_EUPHOTIC_Area_March2022.pdf", width = 14, height = 8)
+  
+  class_df_protist_synd.abund %>%
+    mutate(area.name = fct_reorder(Area2, Latitude.CTD)) %>% ## creating a new variable to reorder factors
+  filter(light_layer == "Euphotic") %>%
+ 
+    ggplot(aes(x = area.name , y = n_reads,  fill(Water_mass.TS1), color = Water_mass.TS1)) +
+        #geom_point(size = 1) +
+       geom_boxplot(outlier.shape = NA) + 
+        #geom_boxplot() +
+      geom_jitter(size = 0.8, width = 0.2, alpha = 0.2) +
+        #scale_x_continuous(limits = c(0, 10)) +
+        #ylim(-100, 0) +
+        scale_color_manual(values = Water_mass_colors) +
+       # geom_errorbar(aes(ymin = mean-sd, ymax = mean+sd), size = 0.1, width = 0.1) +
+        theme_bw() + ggtitle("Class - EUPHOTIC zone standardized abundance by AREA") +
+        xlab("Area")+ ylab("Standarized read abundance") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+        theme(axis.text.x = element_text(hjust = 1, size = 12)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        facet_wrap(~Class, scales = "free_y")
+  dev.off()
+  
+
+```
+
+### PROTIST - ALL 
+
+### TOTAL DATASET EEZ - EUPHOTIC  - CLASS
+```{r, fig.height=4, fig.width=6}
+
+# FILTER ONLY EUPHOTIC
+## NOTE: Problem with group_by does not seem to operate properly. 
+## Solved by reloading dplyr after plyr
+class_df_protist_stat_total <-  df_protist_class.rel %>%
+    filter(light_layer == "Euphotic") %>% ### surface values
+    group_by(Class) %>% 
+    add_tally() %>%
+    summarise(median = median(n_reads, na.rm = FALSE), mean=mean(n_reads, na.rm = FALSE), sd=sd(n_reads, na.rm = FALSE), n=mean(n, na.rm = FALSE)) # we want to account for zero values as well
+
+ class_df_protist_stat_total <- class_df_protist_stat_total %>%
+  arrange( -mean) 
+
+write.xlsx(class_df_protist_stat_total, file = "Tables/Protist_ALL_euphotic_top20_CLASS_REL_STATS_CLASSES_March2022.xlsx")
+
+## BAR PLOT - Figure 5A - BIS WITH SYND
+# color coding # Water mass - SUM
+class_df_protist_stat_total_col <-left_join(class_df_protist_stat_total, classes_division, by=c("Class"= "class")) # join for colors
+
+color_class <- as.character(class_df_protist_stat_total_col$color_hex_class)
+names(color_class) <- as.character(class_df_protist_stat_total_col$Class)
+class_df_protist_stat_total_col$Class = with(class_df_protist_stat_total_col, reorder(Class, -mean))
+
+CairoPDF(file = "R.Figures/Bar/Protist_ALL_euphotic_top20_CLASS_REL_STATS_CLASSES_March2022_Fig_5A.pdf", width = 8, height = 6)
+  ggplot(class_df_protist_stat_total_col, aes(x=Class, y=mean, fill=Class)) +
+    geom_bar(stat="identity", width = 0.9) +
+    scale_fill_manual(values = color_class) +
+    xlab("") +
+    theme_bw() +
+    #theme(aspect.ratio = 2/1) +
+    ggtitle(paste ("Protist - Euphotic - MEAN")) + 
+    geom_errorbar(aes(ymin = mean, ymax = mean+sd), size = 0.1, width = 0.1) +
+    theme(axis.text.x=element_text(angle = 45, hjust = 1, size=6)) +
+    theme(axis.text.y=element_text(angle = 0, hjust = 1, size=6)) +
+    theme(panel.grid.major = element_line(size = 0.1, linetype = 'solid',
+                                colour = "grey"), 
+    panel.grid.minor = element_line(size = 0.05, linetype = 'solid',
+                                colour = "grey")) +
+    theme(axis.ticks = element_line(colour = "black", size = 0.1)) +
+    xlab("") + 
+    ylab("% Relative abundance") +
+    ylim(0, 60)
+dev.off()
+
+
+```
+
+### TOTAL DATASET EEZ - EUPHOTIC  - CLASS
+## by REGION
+```{r, fig.height=4, fig.width=6}
+
+# FILTER ONLY EUPHOTIC - PROTIST ALL
+  ## NOTE: Problem with group_by does not seem to operate properly. 
+  ## Solved by reloading dplyr after plyr
+class_df_protist_stat_region <-  df_protist_class.rel %>%
+    filter(light_layer == "Euphotic") %>% ### surface values
+    group_by(Class, Area2) %>% 
+    add_tally() %>%
+    summarise(median = median(n_reads, na.rm = FALSE), mean=mean(n_reads, na.rm = FALSE), sd=sd(n_reads, na.rm = FALSE), n=mean(n, na.rm = FALSE)) # we want to account for zero values as well
+
+ class_df_protist_stat_region <- class_df_protist_stat_region %>%
+  arrange( Area2, -mean) 
+
+write.xlsx(class_df_protist_stat_region, file = "Tables/Protist_ALL_euphotic_top20_REGION_CLASS_REL_STATS_CLASSES_March2022.xlsx")
+
+
+
+
+```
+
+## Plotting BOX-PLOTS of groups STANDARDIZED abundance in different areas and environmental ranks 
+## ALL PROTIST ##
+
+```{r pressure, echo=FALSE}
+
+
+### Top20 - most abundant classes
+ class.sum_protist = tapply(taxa_sums(ps_protist_class), tax_table(ps_protist_class)[, "Class"], sum, na.rm=TRUE)
+  top20class_protist = names(sort(class.sum_protist, TRUE))[1:20]
+  ps_protist_class.top20.abund = prune_taxa((tax_table(ps_protist_class)[, "Class"] %in% top20class_protist), ps_protist_class)
+  ps_protist_class.top20.abund
+  
+Class_names = data.frame(Class_reads = sort(taxa_sums(ps_protist_class.top20.abund), TRUE), sorted = 1:ntaxa(ps_protist_class.top20.abund), Class = tax_table(ps_protist_class.top20.abund)[, "Class" ])
+
+write.xlsx(Class_names , file = "Tables/Top20_Class_protistALL_read_abundance_sw_March2022.xlsx")
+
+
+
+```
+
+
+## Make LONG FORMAT dataframe for plotting
+# PROTIST ALL #
+```{r pressure, echo=FALSE}
+
+## dataframe for plotting -- Look into standardizes or relative abundances
+otu_df <- as.data.frame(ps_protist_class.top20.abund@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      #filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+taxo_df <- as.data.frame(ps_protist_class.top20.abund@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+    otu_df <- left_join(taxo_df, otu_df)
+
+    metadata_df <- data.frame(sample_data(ps_protist_class.top20.abund)) %>%
+      rownames_to_column(var = "file_code")
+
+    otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+    
+    class_df_protist.abund <-left_join(otu_df, classes_division, by=c("Class"= "class"))
+    class_df_protist.abund <- class_df_protist.abund %>%
+      mutate(pico_pct = Chla_02*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(nano_pct = Chla_2*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(micro_pct = Chla_20*100/(Chla_02 + Chla_2 + Chla_20))
+    
+    # write.xlsx(class_df_protist_synd.abund, file = "Tables/class_df_protist_synd_abund.xlsx")
+
+      
+```
+###Set colors for plotting
+```{r, fig.height=4, fig.width=4}
+# Set colors for plotting
+Water_mass_colors <- c(
+   "#00688b", "#44c45d","#e0301e")
+# PwC palette for STW
+#coastlines palette for STF
+# Flux palette for SAW
+Area_colors <- c(
+  "#e0301e","#ffc100", "#00688b","#39ff14" ,"#0befff","#0a5700", "#ff77ff","#708090","#602320")
+
+Area_BoP_colors <- c("#ffc100", "#00688b","#39ff14" ,"#0befff","#0a5700", "#ff77ff","#708090","#602320") # if Bay of Plenty is left out
+
+Nitrate_colors <- c("#dc6900", "#00688b", "#0befff","#44c45d", "#a32020","#c0c0c0","#00b5e2","#602320")
+
+light_colors <- c(  "#00688b", "#f79d0c")
+
+```
+
+## FIGURE 6 BIS - Water masses - ALL PROTIST
+
+```{r, fig.height=6, fig.width=6}
+
+## WATER MASSES - Figure 6
+
+# I would like to organize the group specific plots from more to less abundant but I don't know yet how to do this using facet-wrap 
+
+  
+  CairoPDF(file = "R.Figures/BoxPlot/Protist_ALL_Abundance_EUPHOTIC_Water_masses_March2022.pdf", width = 14, height = 8) 
+  
+  class_df_protist.abund %>%
+  filter(light_layer == "Euphotic") %>%
+  
+ggplot(aes(x = Water_mass.TS1 , y = n_reads,  fill(Water_mass.TS1), color = Water_mass.TS1)) +
+        #geom_point(size = 1) +
+       geom_boxplot(outlier.shape = NA) + 
+        #geom_boxplot() +
+      geom_jitter(size = 0.8, width = 0.2, alpha = 0.2) +
+        #scale_x_continuous(limits = c(0, 10)) +
+        #ylim(-100, 0) +
+        scale_color_manual(values = Water_mass_colors) +
+       # geom_errorbar(aes(ymin = mean-sd, ymax = mean+sd), size = 0.1, width = 0.1) +
+        theme_bw() + ggtitle("Class - EUPHOTIC zone PROTIST normalized read abundance in Water.masses") +
+        xlab("Water_mass.TS1")+ ylab("standardized read abundance") +
+        theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+        theme(axis.text.x = element_text(hjust = 1, size = 12)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        facet_wrap(~Class, scales = "free_y")
+  dev.off()
+
+```
+### FIGURE S15 - Regions 
+# ALL PROTIST
+
+```{r, fig.height=6, fig.width=6}
+
+  
+    ### AREAS ## - Figure S6
+## reorder areas ##
+  
+CairoPDF(file = "R.Figures/BoxPlot/Protist_ALL_Abundance_EUPHOTIC_Area_March2022.pdf", width = 14, height = 8)
+  
+  class_df_protist.abund %>%
+    mutate(area.name = fct_reorder(Area2, Latitude.CTD)) %>% ## creating a new variable to reorder factors
+  filter(light_layer == "Euphotic") %>%
+ 
+    ggplot(aes(x = area.name , y = n_reads,  fill(Water_mass.TS1), color = Water_mass.TS1)) +
+        #geom_point(size = 1) +
+       geom_boxplot(outlier.shape = NA) + 
+        #geom_boxplot() +
+      geom_jitter(size = 0.8, width = 0.2, alpha = 0.2) +
+        #scale_x_continuous(limits = c(0, 10)) +
+        #ylim(-100, 0) +
+        scale_color_manual(values = Water_mass_colors) +
+       # geom_errorbar(aes(ymin = mean-sd, ymax = mean+sd), size = 0.1, width = 0.1) +
+        theme_bw() + ggtitle("Class - PROTIST ALL - EUPHOTIC zone standardized abundance by AREA") +
+        xlab("Area")+ ylab("Standarized read abundance") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+        theme(axis.text.x = element_text(hjust = 1, size = 12)) +
+        theme(axis.text.y = element_text(size = 12)) +
+        facet_wrap(~Class, scales = "free_y")
+  dev.off()
+  
+
+```
+
+### CLASS LEVEL STACK BAR ANALYSIS - SAMPLE WISE
+## Biophysical moorings - FIGURE 7
+
+# PROTIST - SYND
+
+# Select main classes of interest  -  most abundant classes
+```{r pressure, echo=FALSE}
+
+### select Top 30 PROTIST-SYND classes of interest based on based on abundance
+   protist.synd.class.sum = tapply(taxa_sums(ps_protist_synd_class.rel), tax_table(ps_protist_synd_class.rel)[, "Class"], sum, na.rm=TRUE)
+  top30class = names(sort(protist.class.sum, TRUE))[1:30]
+  ps_protist_synd_class.top30.abund = prune_taxa((tax_table(ps_protist_synd_class.rel)[, "Class"] %in% top30class), ps_protist_synd_class.rel)
+  
+  ps_protist_synd_class.top30.abund
+
+  sort(protist.synd.class.sum, TRUE)[1:15]
+
+```
+
+
+## Make LONG FORMAT dataframe for plotting
+# PROTIST - SYND
+```{r pressure, echo=FALSE}
+
+## dataframe for plotting -- Look into standardizes or relative abundances
+otu_df <- as.data.frame(ps_protist_synd_class.top30.abund@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      #filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+taxo_df <- as.data.frame(ps_protist_synd_class.top30.abund@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+    otu_df <- left_join(taxo_df, otu_df)
+
+    metadata_df <- data.frame(sample_data(ps_protist_synd_class.top30.abund)) %>%
+      rownames_to_column(var = "file_code")
+
+    otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+    
+    class_df_Top30_protist_synd <-left_join(otu_df, classes_division, by=c("Class"= "class"))
+    class_df_Top30_protist_synd <- class_df_Top30_protist_synd %>%
+      mutate(pico_pct = Chla_02*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(nano_pct = Chla_2*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(micro_pct = Chla_20*100/(Chla_02 + Chla_2 + Chla_20))
+    
+    write.xlsx(class_df_Top30_protist_synd, file = "Tables/class_df_Top30_protist_synd.xlsx")
+
+      
+```
+
+### FIGURE 7 - PROTIST - SYND
+```{r, fig.height=10, fig.width=25}
+
+# color coding # Water mass - MEAN
+color_class <- as.character(class_df_Top30_protist_synd$color_hex_class)
+names(color_class) <- as.character(class_df_Top30_protist_synd$Class)
+class_df_Top30_protist_synd$OTU_species = with(class_df_Top30_protist_synd, reorder(Class, n_reads))
+
+## EUPHOTIC - BPM
+test <-  class_df_Top30_protist_synd %>%  
+    filter(Project == "BiophysMoorings") 
+
+title = "Biophysical Moorings - ALL - by water mass"
+
+CairoPDF(file = "R.Figures/Bar/Stacked/BPM_Top30_protist_synd_watermass_ALL.pdf", width = 30, height = 10)
+
+ggplot(data=test, aes(x=Sample_label_depth, y=n_reads, fill=Class)) +
+
+geom_bar(aes(), stat="identity", position="fill", width = 0.9, preserve = "single") +
+scale_fill_manual(values = color_class) +
+theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 12)) +
+theme(axis.text.y = element_text(size = 12)) +
+theme(legend.position="bottom") +
+ggtitle(title) +
+guides(fill=guide_legend(nrow=5)) +
+facet_grid(~Water_mass.TS1, scales = "free_x", space = "free_x") 
+#facet_wrap(~Water_mass.TS1) 
+
+dev.off()
+```
+### CLASS LEVEL STACK BAR ANALYSIS - SAMPLE WISE
+## Biophysical moorings - FIGURE 7
+
+# PROTIST - ALL
+
+# Select main classes of interest  -  most abundant classes
+```{r pressure, echo=FALSE}
+
+### select Top 30 PROTIST-SYND classes of interest based on based on abundance
+   protist.class.sum = tapply(taxa_sums(ps_protist_class.rel), tax_table(ps_protist_class.rel)[, "Class"], sum, na.rm=TRUE)
+  top30class_protist = names(sort(protist.class.sum, TRUE))[1:30]
+  ps_protist_class.top30.abund = prune_taxa((tax_table(ps_protist_class.rel)[, "Class"] %in% top30class), ps_protist_class.rel)
+  
+  ps_protist_class.top30.abund
+
+  sort(protist.class.sum, TRUE)[1:15]
+
+```
+
+
+## Make LONG FORMAT dataframe for plotting
+# PROTIST - ALL
+```{r pressure, echo=FALSE}
+
+## dataframe for plotting -- Look into standardizes or relative abundances
+otu_df <- as.data.frame(ps_protist_class.top30.abund@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      #filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+taxo_df <- as.data.frame(ps_protist_class.top30.abund@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+    otu_df <- left_join(taxo_df, otu_df)
+
+    metadata_df <- data.frame(sample_data(ps_protist_class.top30.abund)) %>%
+      rownames_to_column(var = "file_code")
+
+    otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+    
+    class_df_Top30_protist <-left_join(otu_df, classes_division, by=c("Class"= "class"))
+    class_df_Top30_protist <- class_df_Top30_protist %>%
+      mutate(pico_pct = Chla_02*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(nano_pct = Chla_2*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(micro_pct = Chla_20*100/(Chla_02 + Chla_2 + Chla_20))
+    
+    write.xlsx(class_df_Top30_protist_synd, file = "Tables/class_df_Top30_protist.xlsx")
+
+      
+```
+
+### FIGURE 7 - PROTIST - ALL
+```{r, fig.height=10, fig.width=25}
+
+# color coding # Water mass - MEAN
+color_class <- as.character(class_df_Top30_protist$color_hex_class)
+names(color_class) <- as.character(class_df_Top30_protist$Class)
+class_df_Top30_protist$OTU_species = with(class_df_Top30_protist, reorder(Class, n_reads))
+
+## EUPHOTIC - BPM
+test_protist <-  class_df_Top30_protist %>%  
+    filter(Project == "BiophysMoorings") 
+
+title = "Biophysical Moorings - ALL - by water mass"
+
+CairoPDF(file = "R.Figures/Bar/Stacked/BPM_Top30_protist_ALL_watermass_ALL.pdf", width = 30, height = 10)
+
+ggplot(data=test_protist, aes(x=Sample_label_depth, y=n_reads, fill=Class)) +
+
+geom_bar(aes(), stat="identity", position="fill", width = 0.9, preserve = "single") +
+scale_fill_manual(values = color_class) +
+theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 12)) +
+theme(axis.text.y = element_text(size = 12)) +
+theme(legend.position="bottom") +
+ggtitle(title) +
+guides(fill=guide_legend(nrow=5)) +
+facet_grid(~Water_mass.TS1, scales = "free_x", space = "free_x") 
+#facet_wrap(~Water_mass.TS1) 
+
+dev.off()
+```
+
+### MOST ABUNDANT SPECIES ###
+
+# PROTIST - SYND -  FIGURE 8 and S10
+
+# Select MOST ABUNDANT SPECIES AND PRUNE FOR NEW PS OBJECT THAT CAN BE TRANSFORMED
+
+```{r pressure, echo=FALSE}
+
+    ### most abundant classes
+ species.sum = tapply(taxa_sums(ps_protist_synd_std), tax_table(ps_protist_synd_std)[, "Species"], mean, na.rm=TRUE)
+  top100species_synd = names(sort(species.sum, TRUE))[1:100]
+  Top100species_synd = prune_taxa((tax_table(ps_protist_synd_std)[, "Species"] %in% top100species_synd), ps_protist_synd_std)
+  Top100species_synd
+  
+Species_names_synd = data.frame(Species_reads = sort(taxa_sums(Top100species_synd), TRUE), sorted = 1:ntaxa(Top100species_synd), Species = tax_table(Top100species_synd)[, "Species" ])
+
+write.xlsx(Species_names_synd , file = "Tables/Species_abundance_synd_MEAN_top100_March2022.xlsx")
+
+```
+
+# Dataframe and wide to long transformation of phyloseq object - 
+```{r pressure, echo=FALSE}
+
+otu_df_synd <- as.data.frame(Top100species_synd@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+  # See https://github.com/joey711/phyloseq/issues/983
+    taxo_df_synd <- as.data.frame(Top100species_synd@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+    otu_df_synd <- left_join(taxo_df_synd, otu_df_synd)
+
+    metadata_df <- data.frame(sample_data(Top100species_synd)) %>%
+      rownames_to_column(var = "file_code")
+
+    otu_df_synd <- left_join(otu_df_synd, metadata_df, by = c("file_code"))
+    
+    OTU_abund_top100_synd <-left_join(otu_df_synd, classes_division, by=c("Class"= "class"))
+    
+    write.xlsx(OTU_abund_top100_synd, file = "Tables/OTU_abund_df_protist_synd_top100_March2022.xlsx")
+    
+    # opening the file saved in previous runs
+    OTU_abund_top100_synd<- read_excel("Tables/OTU_abund_df_protist_synd-March2021_top100.xlsx")
+
+
+```
+
+
+### Select most abundant OTUs per WATER MASSES using dplyr - EUPHOTIC
+
+## TOP 100 species ps object - OPTION A for meaningful average abundance values
+
+### FIGURE 8 
+## group by function not working properly now. Dont know why
+
+```{r, fig.height=8, fig.width=8}
+OTU_abund_top100_synd_eu  <- OTU_abund_top100_synd %>%
+  filter(light_layer == "Euphotic") %>%
+  group_by(OTUNumber, Water_mass.TS1) %>%
+  #add_tally() %>%
+  mutate(mean_OTU = mean(n_reads, na.rm=TRUE), median_OTU = median(n_reads, na.rm=TRUE), Total_OTU = sum(n_reads, na.rm = TRUE), n_samples = mean(n)) %>%
+  select(OTUNumber:Water_mass.TS1, Sample_Type, light_layer, supergroup:Total_OTU) %>%
+  arrange(Water_mass.TS1, -Total_OTU) %>%
+  unite(OTU_water, OTUNumber, Water_mass.TS1, remove = FALSE) %>% # to allow selecting for distinct OTUs
+  unite(OTU_genus, OTUNumber, Genus, remove = FALSE) %>%
+  unite(OTU_species, OTUNumber, Species, remove = FALSE)
+
+## Select most abundant OTUs for plotting SUM TOTAL read abundance values
+OTU_abund_top100_synd_eu_sum <- OTU_abund_top100_synd_eu %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+  arrange(Water_mass.TS1, -Total_OTU) %>%
+   group_by(Water_mass.TS1) %>% 
+   top_n(20,Total_OTU)
+
+
+write.xlsx(OTU_abund_top100_synd_eu_sum, file = "Tables/Protist_synd_watermass_EUPHOTIC_top20_SUM.xlsx")
+
+
+```
+
+### FIGURE 8 
+## Script modified to make it work - I don't know why above, mutate does not operate based on previous grouping as group_by. So I have modified to use summarise instead.
+
+```{r, fig.height=8, fig.width=8}
+OTU_abund_top100_synd_eu  <- OTU_abund_top100_synd %>%
+  filter(light_layer == "Euphotic") %>%
+  group_by(OTUNumber, Water_mass.TS1) %>%
+  summarise(OTUNumber, Kingdom, Supergroup, Division, Class, Order, Family, Genus, Species, Cruise_project, Cruise.TAN, Project, Area, Area2, Subarea, Water_mass.TS1, Sample_Type, light_layer, supergroup, color_supergroup, division, color_division,color_class, color_hex_class, color_hex_division, MEAN = mean(n_reads), SUM = sum(n_reads), MEDIAN = median(n_reads)) %>%
+  distinct(OTUNumber, .keep_all = TRUE) %>%
+  arrange(Water_mass.TS1, -SUM) %>%
+  unite(OTU_water, OTUNumber, Water_mass.TS1, remove = FALSE) %>% # to allow selecting for distinct OTUs
+  unite(OTU_genus, OTUNumber, Genus, remove = FALSE) %>%
+  unite(OTU_species, OTUNumber, Species, remove = FALSE)
+
+## Select most abundant OTUs for plotting SUM TOTAL read abundance values
+OTU_abund_top100_synd_eu_sum <- OTU_abund_top100_synd_eu %>%
+  #distinct(OTU_water, .keep_all = TRUE) %>%
+  arrange(Water_mass.TS1, -SUM) %>%
+   group_by(Water_mass.TS1) %>% 
+   top_n(20,SUM)
+
+write.xlsx(OTU_abund_top100_synd_eu_sum, file = "Tables/Protist_synd_watermass_EUPHOTIC_top20_SUM_March2022.xlsx")
+
+
+```
+
+# Plotting  most abundant OTUs per WATER MASSES using dplyr - EUPHOTIC
+
+## Plot without reordering using facet_wrap
+### Problems reordering withing each water mass 
+
+```{r, fig.height=8, fig.width=8}
+
+# Diatoms
+OTU_abund_top100_synd_eu_sum_diatoms <- OTU_abund_top100_synd_eu_sum %>%
+  filter(Class == "Bacillariophyta") %>%
+  top_n(5,mean_OTU)
+# color coding # Water mass - SUM
+
+
+
+
+ggplot(OTU_abund_top100_synd_eu_sum_diatoms, aes(x = Julian, y = n_reads, color = Class) ) +
+        geom_point(size = 3.0) +
+       #scale_color_manual(values = color_class) +
+        geom_path() +
+       # ylim(-100, 0) +
+        #xlim(260,280) +
+        #scale_x_continuous(breaks=seq(260,282,2)) +
+        #geom_errorbar(data=Groups, mapping = aes(ymin = mean-sd, ymax = mean+sd), size = 0.5, height = 0.1, alpha = 1) +
+        theme_bw() + ggtitle("Class abundance - 0-50m") +
+        xlab("(date)")+ ylab("std reads") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10)) +
+        theme(axis.text.y = element_text(size = 10)) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12))  +
+        theme(panel.grid.major = element_line(size = 0.025, linetype = 'solid',
+                                colour = "grey"), 
+    panel.grid.minor = element_line(size = 0.01, linetype = 'solid',
+                                colour = "grey")) +
+        facet_wrap(~Species, nrow=3, ncol=4, scales = "free")
+  
+
+  ggsave("OTU_abund_top100_synd_eu_sum_diatoms.pdf", path = "R.Figures/Species/water_mass", dpi = 300, height = 4, width = 8)
+  
+### Plot without reordering using facet_wrap - Problems reordering withing each water mass
+```
+
+
+## Plot SEASONALITY OF MOST ABUNDANT SPECIES 
+
+```{r, fig.height=8, fig.width=8}
+
+
+# color coding # Water mass - SUM
+color_class1 <- as.character(OTU_abund_top100_synd_eu_sum$color_hex_class)
+names(color_class1) <- as.character(OTU_abund_top100_synd_eu_sum$Class)
+OTU_abund_top100_synd_eu_sum$OTU_species = with(OTU_abund_top100_synd_eu_sum, reorder(OTU_species, SUM))
+
+
+ggplot(OTU_abund_top100_synd_eu_sum, aes(x=OTU_species, y=SUM, fill=Class)) +
+    geom_bar(stat="identity", width = 0.9) +
+    scale_fill_manual(values = color_class1) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste ("Protist-synd - Euphotic - SUM")) + 
+    theme(axis.text.x=element_text(angle = 45, hjust = 1, size=6)) +
+    theme(axis.text.y=element_text(angle = 0, hjust = 1, size=4)) +
+    theme(panel.grid.major = element_line(size = 0.05, linetype = 'solid',
+                                colour = "grey"), 
+    panel.grid.minor = element_line(size = 0.05, linetype = 'solid',
+                                colour = "grey")) +
+    theme(axis.ticks = element_line(colour = "black", size = 0.05)) +
+    xlab("") + 
+    ylab("Cumulative OTU - Sequencing depth standarized abundance") +
+    coord_flip() +
+    facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+ 
+  ggsave("Protist_synd_euphotic_top20_SUM_OTUs.pdf", path = "R.Figures/Species/water_mass", dpi = 300, height = 4, width = 8)
+  
+### Plot without reordering using facet_wrap - Problems reordering withing each water mass
+```
+
+### SO FOR NOW I NEED TO PLOT WATER MASSES INDEPENDENTLY - One water mass at a time
+
+## SUM of reads - It rseults in the same ranking as using the mean but with different absolute numbers
+```{r, fig.height=8, fig.width=8}
+  
+## Reordering and plotting using forcat package - One water mass at at time
+
+ Top_otu_order_synd <- OTU_abund_top100_synd_eu_sum %>%
+   filter(Water_mass.TS1 == "STF") %>%
+   mutate(name = fct_reorder(OTU_species, SUM)) 
+   
+ #CairoPDF(file = "R.Figures/Species/Protist_synd_euphotic_top20_SAW_TOP100.pdf", width = 3, height = 4) 
+ ggplot(Top_otu_order_synd, aes(x=name, y=SUM, fill=Class)) +
+    geom_bar(stat = "identity", width = 0.95) +
+    coord_flip() +
+    #scale_fill_viridis_d(option = "plasma") +
+    scale_fill_manual(values = color_class1) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste (" Protist - Synd- Euphotic - STF - SUM")) + 
+    theme(axis.text.x=element_text(angle = 0, hjust = 1, size=12)) +
+    theme(axis.text.y=element_text(angle = 45, hjust = 1, size=12)) +
+    xlab("") + 
+    ylab("Sum OTU - Sequencing depth standarized abundance")
+    #facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+ 
+ ggsave("Protist_synd_euphotic_top20_STF_SUM.pdf", path = "R.Figures/Species", dpi = 300,  width = 8, height = 16, scale=1.2)
+ 
+
+```
+
+### Select most abundant OTUs per REGION/VOYAGE using dplyr - EUPHOTIC
+
+## TOP 100 species ps object - OPTION A for meaningful average abundance values
+
+# PROTIST - SYND - FIGURE S10
+
+```{r, fig.height=8, fig.width=8}
+OTU_abund_top100_synd_eu_area <- OTU_abund_top100_synd %>%
+  filter(light_layer == "Euphotic") %>%
+  group_by(OTUNumber, Area2) %>%
+  mutate(mean_OTU_area = mean(n_reads, na.rm=TRUE), median_OTU_area = median(n_reads, na.rm=TRUE), Total_OTU_area = sum(n_reads, na.rm = TRUE)) %>%
+  select(OTUNumber:Water_mass.TS1, Sample_Type, light_layer, supergroup:Total_OTU_area) %>%
+  arrange(Area2, -Total_OTU_area) %>%
+  unite(OTU_water, OTUNumber, Area2, remove = FALSE) %>% # to allow selecting for distinct OTUs
+  unite(OTU_genus, OTUNumber, Genus, remove = FALSE) %>%
+  unite(OTU_species, OTUNumber, Species, remove = FALSE)
+
+
+## Select most abundant OTUs for plotting SUM TOTAL abundance values
+OTU_abund_top100_synd_eu_area <- OTU_abund_top100_synd_eu_area %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+   group_by(Area2) %>% 
+   top_n(20,Total_OTU_area)
+
+
+
+write.xlsx(OTU_abund_top100_synd_eu_area, file = "Tables/Protist_synd_Area_Euphotic_top20_TOTAL_March2022.xlsx")
+
+```
+
+
+# Plotting  most abundant OTUs per REGIONS using dplyr - One region at a time
+
+# PROTIST - SYND
+
+```{r, fig.height=8, fig.width=8}
+  
+## Reordering and plotting using forcat package - One water mass at at time
+## Areas : Bio-SBM, Bio-STF, Bio-NBM, Campbell Plateau, ChathamRise, Cross-shelf, SAF, STW SpringBloom
+ Top_otu_order_area <- OTU_abund_top100_eu_area_sum %>%
+   filter(Area2 == "Cross-shelf") %>%
+   mutate(name = fct_reorder(OTU_species, Total_OTU_area)) 
+   
+ #CairoPDF(file = "R.Figures/Species/Regions/Protist_synd_euphotic_top20_BoP.pdf", width = 3, height = 4) 
+ ggplot(Top_otu_order_area, aes(x=name, y=Total_OTU_area, fill=Class)) +
+    geom_bar(stat = "identity", width = 0.95) +
+    coord_flip() +
+    #scale_fill_viridis_d(option = "plasma") +
+    scale_fill_manual(values = color_class4) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste (" Protist-Synd - Euphotic - Cross-shelf")) + 
+    theme(axis.text.x=element_text(angle = 0, hjust = 1, size=12)) +
+    theme(axis.text.y=element_text(angle = 45, hjust = 1, size=12)) +
+    xlab("") + 
+    ylab("Cumulative OTU - Sequencing depth standarized abundance")
+    #facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+
+  ggsave("Protist_synd_Euphotic_top20_Cross-shelf.pdf", path = "R.Figures/Species", dpi = 300,  width = 8, height = 16, scale=1.2)
+
+```
+
+### MOST ABUNDANT SPECIES ###
+
+# PROTIST - ALL -  
+
+# FIGURE 8 and S10 BIS
+
+# Select MOST ABUNDANT SPECIES AND PRUNE FOR NEW PS OBJECT THAT CAN BE TRANSFORMED
+
+```{r pressure, echo=FALSE}
+
+    ### most abundant classes
+ species.sum_protist = tapply(taxa_sums(ps_protist_std), tax_table(ps_protist_std)[, "Species"], mean, na.rm=TRUE)
+  top100species_protist = names(sort(species.sum_protist, TRUE))[1:100]
+  Top100species_protist = prune_taxa((tax_table(ps_protist_std)[, "Species"] %in% top100species_protist), ps_protist_std)
+  Top100species_protist
+  
+Species_names_protist = data.frame(Species_reads = sort(taxa_sums(Top100species_protist), TRUE), sorted = 1:ntaxa(Top100species_protist), Species = tax_table(Top100species_protist)[, "Species" ])
+
+write.xlsx(Species_names_protist , file = "Tables/Species_abundance_protist_ALL_MEAN_top100_March2022.xlsx")
+
+```
+
+# Dataframe and wide to long transformation of phyloseq object - 
+# PROTIST ALL
+```{r pressure, echo=FALSE}
+
+otu_df_protist <- as.data.frame(Top100species_protist@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+  # See https://github.com/joey711/phyloseq/issues/983
+    taxo_df_protist <- as.data.frame(Top100species_protist@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+    otu_df_protist <- left_join(taxo_df_protist, otu_df_protist)
+
+    metadata_df <- data.frame(sample_data(Top100species_protist)) %>%
+      rownames_to_column(var = "file_code")
+
+    otu_df_protist <- left_join(otu_df_protist, metadata_df, by = c("file_code"))
+    
+    OTU_abund_top100_protist <-left_join(otu_df_protist, classes_division, by=c("Class"= "class"))
+    
+    write.xlsx(OTU_abund_top100_protist, file = "Tables/OTU_abund_df_protist_ALL_top100_March2022.xlsx")
+    
+    
+
+
+```
+
+
+### Select most abundant OTUs per WATER MASSES using dplyr - EUPHOTIC
+
+## TOP 100 species ps object - OPTION A for meaningful average abundance values
+
+### FIGURE 8 BIS - PROTIST ALL
+## group by function not working properly now. Dont know why
+
+```{r, fig.height=8, fig.width=8}
+OTU_abund_top100_protist_eu  <- OTU_abund_top100_protist %>%
+  filter(light_layer == "Euphotic") %>%
+  group_by(OTUNumber, Water_mass.TS1) %>%
+  #add_tally() %>%
+  mutate(mean_OTU = mean(n_reads, na.rm=TRUE), median_OTU = median(n_reads, na.rm=TRUE), Total_OTU = sum(n_reads, na.rm = TRUE), n_samples = mean(n)) %>%
+  select(OTUNumber:Water_mass.TS1, Sample_Type, light_layer, supergroup:Total_OTU) %>%
+  arrange(Water_mass.TS1, -Total_OTU) %>%
+  unite(OTU_water, OTUNumber, Water_mass.TS1, remove = FALSE) %>% # to allow selecting for distinct OTUs
+  unite(OTU_genus, OTUNumber, Genus, remove = FALSE) %>%
+  unite(OTU_species, OTUNumber, Species, remove = FALSE)
+
+## Select most abundant OTUs for plotting SUM TOTAL read abundance values
+OTU_abund_top100_protist_eu_mean <- OTU_abund_top100_protist_eu %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+  arrange(Water_mass.TS1, -Total_OTU) %>%
+   group_by(Water_mass.TS1) %>% 
+   top_n(30,Total_OTU)
+
+
+write.xlsx(OTU_abund_top100_protist_eu_mean, file = "Tables/Protist_ALL_watermass_EUPHOTIC_top30_SUM_March2022.xlsx")
+
+
+```
+
+### FIGURE 8 BIS - PROTIST ALL
+## Script modified to make it work - I don't know why above, mutate does not operate based on previous grouping as group_by. So I have modified to use summarise instead.
+
+```{r, fig.height=8, fig.width=8}
+# OTU_abund_top100_protist_eu  <- OTU_abund_top100_protist %>%
+#   filter(light_layer == "Euphotic") %>%
+#   group_by(OTUNumber, Water_mass.TS1) %>%
+#   summarise(OTUNumber, Kingdom, Supergroup, Division, Class, Order, Family, Genus, Species, Cruise_project, Cruise.TAN, Project, Area, Area2, Subarea, Water_mass.TS1, Sample_Type, light_layer, supergroup, color_supergroup, division, color_division,color_class, color_hex_class, color_hex_division, MEAN = mean(n_reads), SUM = sum(n_reads), MEDIAN = median(n_reads)) %>%
+#   distinct(OTUNumber, .keep_all = TRUE) %>%
+#   arrange(Water_mass.TS1, -SUM) %>%
+#   unite(OTU_water, OTUNumber, Water_mass.TS1, remove = FALSE) %>% # to allow selecting for distinct OTUs
+#   unite(OTU_genus, OTUNumber, Genus, remove = FALSE) %>%
+#   unite(OTU_species, OTUNumber, Species, remove = FALSE)
+# 
+# ## Select most abundant OTUs for plotting SUM TOTAL read abundance values
+# OTU_abund_top100_protist_eu_sum <- OTU_abund_top100_protist_eu %>%
+#   #distinct(OTU_water, .keep_all = TRUE) %>%
+#   arrange(Water_mass.TS1, -SUM) %>%
+#    group_by(Water_mass.TS1) %>% 
+#    top_n(20,SUM)
+# 
+# write.xlsx(OTU_abund_top100_protist_eu_sum, file = "Tables/Protist_ALL_watermass_EUPHOTIC_top20_SUM_March2022.xlsx")
+
+
+```
+
+# Plotting  most abundant OTUs per WATER MASSES using dplyr - EUPHOTIC
+
+## Plot without reordering using facet_wrap
+### Problems reordering withing each water mass 
+# PROTIST ALL
+
+```{r, fig.height=8, fig.width=8}
+
+
+# color coding # Water mass - SUM or MEAN
+color_class1 <- as.character(OTU_abund_top100_protist_eu_mean$color_hex_class)
+names(color_class1) <- as.character(OTU_abund_top100_protist_eu_mean$Class)
+OTU_abund_top100_protist_eu_mean$OTU_species = with(OTU_abund_top100_protist_eu_mean, reorder(OTU_species, Total_OTU))
+
+
+ggplot(OTU_abund_top100_protist_eu_mean, aes(x=OTU_species, y=Total_OTU, fill=Class)) +
+    geom_bar(stat="identity", width = 0.9) +
+    scale_fill_manual(values = color_class1) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste ("Protist-ALL - Euphotic - TOTAL SUM")) + 
+    theme(axis.text.x=element_text(angle = 45, hjust = 1, size=6)) +
+    theme(axis.text.y=element_text(angle = 0, hjust = 1, size=4)) +
+    theme(panel.grid.major = element_line(size = 0.05, linetype = 'solid',
+                                colour = "grey"), 
+    panel.grid.minor = element_line(size = 0.05, linetype = 'solid',
+                                colour = "grey")) +
+    theme(axis.ticks = element_line(colour = "black", size = 0.05)) +
+    xlab("") + 
+    ylab("Cumulative OTU - Sequencing depth standarized abundance") +
+    coord_flip() +
+    facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+ 
+  ggsave("Protist_ALL_euphotic_top30_SUM_OTUs.pdf", path = "R.Figures/Species", dpi = 300, height = 4, width = 8)
+  
+### Plot without reordering using facet_wrap - Problems reordering withing each water mass
+```
+
+
+### SO FOR NOW I NEED TO PLOT WATER MASSES INDEPENDENTLY - One water mass at a time
+
+# PROTIST ALL
+
+## SUM of reads - It rseults in the same ranking as using the mean but with different absolute numbers
+```{r, fig.height=8, fig.width=8}
+  
+## Reordering and plotting using forcat package - One water mass at at time
+
+ Top_otu_order_protist <- OTU_abund_top100_protist_eu_mean %>%
+   filter(Water_mass.TS1 == "SAW") %>%
+   mutate(name = fct_reorder(OTU_species, mean_OTU)) 
+   
+ #CairoPDF(file = "R.Figures/Species/Protist_protist_euphotic_top20_SAW_TOP100.pdf", width = 3, height = 4) 
+ ggplot(Top_otu_order_protist, aes(x=name, y=mean_OTU, fill=Class)) +
+    geom_bar(stat = "identity", width = 0.95) +
+    coord_flip() +
+    #scale_fill_viridis_d(option = "plasma") +
+    scale_fill_manual(values = color_class1) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste (" Protist - ALL- Euphotic - SAW - MEAN")) + 
+    theme(axis.text.x=element_text(angle = 0, hjust = 1, size=12)) +
+    theme(axis.text.y=element_text(angle = 45, hjust = 1, size=12)) +
+    xlab("") + 
+    ylab("mean OTU - Sequencing depth standarized abundance")
+    #facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+ 
+ ggsave("Protist_ALL_euphotic_top30_SAW_MEAN.pdf", path = "R.Figures/Species", dpi = 300,  width = 8, height = 16, scale=1.2)
+ 
+
+```
+
+### Select most abundant OTUs per WATER MASSES using dplyr
+
+### BPM - APHOTIC ####
+
+## TOP 100 species ps object - OPTION A for meaningful average abundance values
+
+### FIGURE 8 BIS - PROTIST ALL
+## group by function not working properly now. Dont know why
+
+```{r, fig.height=8, fig.width=8}
+OTU_abund_top100_protist_aphotic  <- OTU_abund_top100_protist %>%
+  filter(light_layer == "Aphotic") %>%
+  filter(Project == "BiophysMoorings") %>%
+  group_by(OTUNumber, Water_mass.TS1) %>%
+  #add_tally() %>%
+  mutate(mean_OTU = mean(n_reads, na.rm=TRUE), median_OTU = median(n_reads, na.rm=TRUE), Total_OTU = sum(n_reads, na.rm = TRUE), n_samples = mean(n)) %>%
+  select(OTUNumber:Water_mass.TS1, Sample_Type, light_layer, supergroup:Total_OTU) %>%
+  arrange(Water_mass.TS1, -Total_OTU) %>%
+  unite(OTU_water, OTUNumber, Water_mass.TS1, remove = FALSE) %>% # to allow selecting for distinct OTUs
+  unite(OTU_genus, OTUNumber, Genus, remove = FALSE) %>%
+  unite(OTU_species, OTUNumber, Species, remove = FALSE)
+
+## Select most abundant OTUs for plotting SUM TOTAL read abundance values
+OTU_abund_top100_protist_aphotic_mean <- OTU_abund_top100_protist_aphotic %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+  arrange(Water_mass.TS1, -mean_OTU) %>%
+   group_by(Water_mass.TS1) %>% 
+   top_n(20,Total_OTU)
+
+
+write.xlsx(OTU_abund_top100_protist_aphotic_mean, file = "Tables/Protist_ALL_watermass_APHOTIC_BPM_top20_SUM_March2022.xlsx")
+
+
+```
+
+### FIGURE 8 BIS - PROTIST ALL
+
+### BPM - APHOTIC ####
+
+## Script modified to make it work - I don't know why above, mutate does not operate based on previous grouping as group_by. So I have modified to use summarise instead.
+
+```{r, fig.height=8, fig.width=8}
+# OTU_abund_top100_protist_aphotic  <- OTU_abund_top100_protist %>%
+#   filter(light_layer == "aphotic") %>%
+#     filter(Project == "BiophysMoorings") %>%
+# group_by(OTUNumber, Water_mass.TS1) %>%
+#   summarise(OTUNumber, Kingdom, Supergroup, Division, Class, Order, Family, Genus, Species, Cruise_project, Cruise.TAN, Project, Area, Area2, Subarea, Water_mass.TS1, Sample_Type, light_layer, supergroup, color_supergroup, division, color_division,color_class, color_hex_class, color_hex_division, MEAN = mean(n_reads), SUM = sum(n_reads), MEDIAN = median(n_reads)) %>%
+#   distinct(OTUNumber, .keep_all = TRUE) %>%
+#   arrange(Water_mass.TS1, -MEAN) %>%
+#   unite(OTU_water, OTUNumber, Water_mass.TS1, remove = FALSE) %>% # to allow selecting for distinct OTUs
+#   unite(OTU_genus, OTUNumber, Genus, remove = FALSE) %>%
+#   unite(OTU_species, OTUNumber, Species, remove = FALSE)
+# 
+# ## Select most abundant OTUs for plotting SUM TOTAL read abundance values
+# OTU_abund_top100_protist_aphotic_sum <- OTU_abund_top100_protist_aphotic %>%
+#   #distinct(OTU_water, .keep_all = TRUE) %>%
+#   arrange(Water_mass.TS1, -SUM) %>%
+#    group_by(Water_mass.TS1) %>% 
+#    top_n(20,SUM)
+# 
+# write.xlsx(OTU_abund_top100_protist_eu_sum, file = "Tables/Protist_ALL_watermass_APHOTIC_top20_SUM_March2022.xlsx")
+
+
+```
+
+# Plotting  most abundant OTUs per WATER MASSES using dplyr - 
+
+## APHOTIC - BPM @####
+
+## Plot without reordering using facet_wrap
+### Problems reordering withing each water mass 
+# PROTIST ALL
+
+```{r, fig.height=8, fig.width=8}
+
+
+# color coding # Water mass - MEAN
+color_class1 <- as.character(OTU_abund_top100_protist_aphotic_mean$color_hex_class)
+names(color_class1) <- as.character(OTU_abund_top100_protist_aphotic_mean$Class)
+OTU_abund_top100_protist_aphotic_mean$OTU_species = with(OTU_abund_top100_protist_aphotic_mean, reorder(OTU_species, mean_OTU))
+
+
+ggplot(OTU_abund_top100_protist_aphotic_mean, aes(x=OTU_species, y=mean_OTU, fill=Class)) +
+    geom_bar(stat="identity", width = 0.9) +
+    scale_fill_manual(values = color_class1) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste ("Protist-ALL - Aphotic-BPM - mean OTU")) + 
+    theme(axis.text.x=element_text(angle = 45, hjust = 1, size=6)) +
+    theme(axis.text.y=element_text(angle = 0, hjust = 1, size=4)) +
+    theme(panel.grid.major = element_line(size = 0.05, linetype = 'solid',
+                                colour = "grey"), 
+    panel.grid.minor = element_line(size = 0.05, linetype = 'solid',
+                                colour = "grey")) +
+    theme(axis.ticks = element_line(colour = "black", size = 0.05)) +
+    xlab("") + 
+    ylab("Cumulative OTU - Sequencing depth standarized abundance") +
+    coord_flip() 
+    #facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+ 
+  ggsave("Protist_ALL_Aphotic_top20_MEAN_OTUs.pdf", path = "R.Figures/Species/water_mass", dpi = 300, height = 4, width = 8)
+  
+### Plot without reordering using facet_wrap - Problems reordering withing each water mass
+```
+
+
+### SO FOR NOW I NEED TO PLOT WATER MASSES INDEPENDENTLY - One water mass at a time
+
+# PROTIST ALL -  ##### APHOTIC ##### BPM
+
+## SUM of reads - It rseults in the same ranking as using the mean but with different absolute numbers
+```{r, fig.height=8, fig.width=8}
+  
+## Reordering and plotting using forcat package - One water mass at at time
+
+ Top_otu_order_protist_aphotic <- OTU_abund_top100_protist_aphotic_mean %>%
+   filter(Water_mass.TS1 == "STF") %>%
+   mutate(name = fct_reorder(OTU_species, mean_OTU)) 
+   
+ #CairoPDF(file = "R.Figures/Species/Protist_protist_euphotic_top20_SAW_TOP100.pdf", width = 3, height = 4) 
+ ggplot(Top_otu_order_protist_aphotic, aes(x=name, y=mean_OTU, fill=Class)) +
+    geom_bar(stat = "identity", width = 0.95) +
+    coord_flip() +
+    #scale_fill_viridis_d(option = "plasma") +
+    scale_fill_manual(values = color_class1) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste (" Protist - ALL- Aphotic - Bio-STF - Mean")) + 
+    theme(axis.text.x=element_text(angle = 0, hjust = 1, size=12)) +
+    theme(axis.text.y=element_text(angle = 45, hjust = 1, size=12)) +
+    xlab("") + 
+    ylab("Sum OTU - Sequencing depth standarized abundance")
+    #facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+ 
+ ggsave("Protist_ALL_Aphotic_top20_BPM-STF_MEAN_March2022.pdf", path = "R.Figures/Species/Aphotic", dpi = 300,  width = 8, height = 16, scale=1.2)
+ 
+
+```
+
+### Select most abundant OTUs per REGION/VOYAGE using dplyr - EUPHOTIC
+
+## TOP 100 species ps object - OPTION A for meaningful average abundance values
+
+# PROTIST - ALL - FIGURE S10 BIS
+
+```{r, fig.height=8, fig.width=8}
+OTU_abund_top100_protist_eu_area <- OTU_abund_top100_protist %>%
+  filter(light_layer == "Euphotic") %>%
+  group_by(OTUNumber, Area2) %>%
+  mutate(mean_OTU_area = mean(n_reads, na.rm=TRUE), median_OTU_area = median(n_reads, na.rm=TRUE), Total_OTU_area = sum(n_reads, na.rm = TRUE)) %>%
+  select(OTUNumber:Water_mass.TS1, Sample_Type, light_layer, supergroup:Total_OTU_area) %>%
+  arrange(Area2, -Total_OTU_area) %>%
+  unite(OTU_water, OTUNumber, Area2, remove = FALSE) %>% # to allow selecting for distinct OTUs
+  unite(OTU_genus, OTUNumber, Genus, remove = FALSE) %>%
+  unite(OTU_species, OTUNumber, Species, remove = FALSE)
+
+
+## Select most abundant OTUs for plotting SUM TOTAL abundance values
+OTU_abund_top100_protist_eu_area <- OTU_abund_top100_protist_eu_area %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+   group_by(Area2) %>% 
+   top_n(20,mean_OTU_area)
+
+
+
+write.xlsx(OTU_abund_top100_protist_eu_area, file = "Tables/Protist_ALL_Area_Euphotic_top20_MEANL_March2022.xlsx")
+
+```
+
+
+# Plotting  most abundant OTUs per REGIONS using dplyr - One region at a time
+
+# PROTIST - ALL
+
+```{r, fig.height=8, fig.width=8}
+  
+## Reordering and plotting using forcat package - One water mass at at time
+## Areas : Bio-SAM, Bio-STF, Bio-STM, Campbell Plateau, ChathamRise, Cross-shelf, SAF, STW SpringBloom
+ Top_otu_order_area <- OTU_abund_top100_protist_eu_area %>%
+   filter(Area2 == "SAF") %>%
+   mutate(name = fct_reorder(OTU_species, mean_OTU_area)) 
+   
+ #CairoPDF(file = "R.Figures/Species/Regions/Protist_synd_euphotic_top20_BoP.pdf", width = 3, height = 4) 
+ ggplot(Top_otu_order_area, aes(x=name, y=mean_OTU_area, fill=Class)) +
+    geom_bar(stat = "identity", width = 0.95) +
+    coord_flip() +
+    #scale_fill_viridis_d(option = "plasma") +
+    scale_fill_manual(values = color_class1) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste (" Protist ALL - Euphotic - SAF")) + 
+    theme(axis.text.x=element_text(angle = 0, hjust = 1, size=12)) +
+    theme(axis.text.y=element_text(angle = 45, hjust = 1, size=12)) +
+    xlab("") + 
+    ylab("mean OTU - Sequencing depth standarized abundance")
+    #facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+
+  ggsave("Protist_ALL_Euphotic_top20_SAF_MEAN.pdf", path = "R.Figures/Species", dpi = 300,  width = 8, height = 16, scale=1.2)
+
+```
+
+### FIGURE S13 APHOTIC - Biophysical Moorings only
+
+## Script modified to make it work - I don't know why above, mutate does not operate based on previous grouping as group_by. So I have modified to use summarise instead.
+
+```{r, fig.height=8, fig.width=8}
+OTU_abund_top100_BPM_aphotic  <- OTU_abund_top100_protist %>%
+    filter(Project == "BiophysMoorings") %>%
+    filter(light_layer == "Aphotic") %>%
+  group_by(OTUNumber,Water_mass.TS1) %>%
+  summarise(OTUNumber, Kingdom, Supergroup, Division, Class, Order, Family, Genus, Species, n_reads, Cruise_project, Cruise.TAN, Project, Area, Area2, Subarea, Water_mass.TS1, Sample_Type, light_layer, supergroup, color_supergroup, division, color_division,color_class, color_hex_class, color_hex_division, MEAN = mean(n_reads), SUM = sum(n_reads), MEDIAN = median(n_reads)) %>%
+  distinct(OTUNumber, .keep_all = TRUE) %>%
+  arrange(Water_mass.TS1, -SUM) %>%
+  unite(OTU_water, OTUNumber, Water_mass.TS1, remove = FALSE) %>% # to allow selecting for distinct OTUs
+  unite(OTU_genus, OTUNumber, Genus, remove = FALSE) %>%
+  unite(OTU_species, OTUNumber, Species, remove = FALSE)
+
+## Select most abundant OTUs for plotting SUM TOTAL read abundance values
+OTU_abund_top100_BPM_aphotic_sum <- OTU_abund_top100_BPM_aphotic %>%
+  #distinct(OTU_water, .keep_all = TRUE) %>%
+  arrange(Water_mass.TS1, -SUM) %>%
+   group_by(Water_mass.TS1) %>% 
+   top_n(20,SUM)
+
+write.xlsx(OTU_abund_top100_BPM_aphotic_sum, file = "Tables/Protist_ALL_watermass_BPM_APHOTIC_top20_SUM_March2022.xlsx")
+
+## Select most abundant OTUs for plotting MEAN read abundance values
+OTU_abund_top100_BPM_aphotic_mean <- OTU_abund_top100_BPM_aphotic %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+     arrange(Water_mass.TS1, -MEAN) %>%
+     group_by(Water_mass.TS1) %>% 
+     top_n(20, MEAN)
+
+write.xlsx(OTU_abund_top100_BPM_aphotic_mean, file = "Tables/Protist_ALL_watermass_BPM_APHOTIC_top20_MEAN_March2022.xlsx")
+
+## Select most abundant OTUs for plotting MEDIAN read abundance values
+OTU_abund_top100_BPM_aphotic_median <- OTU_abund_top100_BPM_aphotic %>%
+  distinct(OTU_water, .keep_all = TRUE) %>%
+     arrange(Water_mass.TS1, -MEDIAN) %>%
+     group_by(Water_mass.TS1) %>% 
+    top_n(20,MEDIAN)
+
+write.xlsx(OTU_abund_top100_BPM_aphotic_median, file = "Tables/Protist_ALL_watermass_BPM_APHOTIC_top20_MEDIAN_March2022.xlsx")
+
+
+```
+
+## SUM of reads - It results in the same ranking as using the mean but with different absolute numbers
+```{r, fig.height=8, fig.width=8}
+  
+# color coding # Water mass - SUM
+color_class1 <- as.character(OTU_abund_top100_BPM_aphotic_mean$color_hex_class)
+names(color_class1) <- as.character(OTU_abund_top100_BPM_aphotic_mean$Class)
+OTU_abund_top100_BPM_aphotic_mean$OTU_species = with(OTU_abund_top100_BPM_aphotic_mean, reorder(OTU_species, MEAN))
+
+## Reordering and plotting using forcat package - One water mass at at time
+
+ Top_otu_order <- OTU_abund_top100_BPM_aphotic_mean %>%
+   filter(Water_mass.TS1 == "STW") %>%
+   mutate(name = fct_reorder(OTU_species, MEAN)) 
+   
+ #CairoPDF(file = "R.Figures/Species/Protist_synd_euphotic_top20_STW_TOP100.pdf", width = 3, height = 4) 
+ ggplot(Top_otu_order, aes(x=name, y=MEAN, fill=Class)) +
+    geom_bar(stat = "identity", width = 0.95) +
+    coord_flip() +
+    #scale_fill_viridis_d(option = "plasma") +
+    scale_fill_manual(values = color_class1) +
+    xlab("") +
+    theme_bw() +
+    theme(aspect.ratio = 2/1) +
+    ggtitle(paste (" Protist ALL - BPM_Aphotic - STW - SUM")) + 
+    theme(axis.text.x=element_text(angle = 0, hjust = 1, size=12)) +
+    theme(axis.text.y=element_text(angle = 45, hjust = 1, size=12)) +
+    xlab("") + 
+    ylab("Sum OTU - Sequencing depth standarized abundance")
+    #facet_wrap(~Water_mass.TS1, scales="free")
+ #dev.off()
+ 
+ ggsave("Protist_synd_BPM_Aphotic_top20_STW_MEAN_March2022.pdf", path = "R.Figures/Species", dpi = 300,  width = 8, height = 16, scale=1.2)
+ 
+
+```
+
+## ALL SAmples - SPECIES 
+
+# PROTIST - SYND
+### FIGURE 9 - Heatmap
+
+```{r, fig.height=15, fig.width=25}
+
+## EUPHOTIC
+### Select 30 the most abundant PROTIST-SYND taxa in EUPHOTIC
+   ps_protist_synd_std_eu <-  ps_protist_synd_std %>%  
+    #subset_samples(Project == "BiophysMoorings") %>%
+    subset_samples(light_layer == "Euphotic")
+  
+  topN <- 50
+  most_abundant_taxa_synd <- sort(taxa_sums(ps_protist_synd_std_eu), TRUE)[1:topN]
+  Euphotic_T30_all_synd <- prune_taxa(names(most_abundant_taxa_synd), ps_protist_synd_std_eu)
+
+## AREA CAST DEPTH 
+ 
+   CairoPDF(file = "R.Figures/Heatmaps/Top50_euphotic_Protist_synd_March2022.pdf", width = 30, height = 10)
+  
+  #WITHOUT TRANFORMATION OF THE DATA
+  plot_heatmap(Euphotic_T30_all_synd, method = "NMDS", distance ="jaccard", binary = TRUE,
+         taxa.label = "Species", taxa.order = "Class", sample.label = "Area_U_Cast_Depth1",
+         trans=NULL, low="beige", high="red", na.value="beige") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 4)) +
+        theme(axis.text.y = element_text(size = 12))
+        
+  # WIT THE DEFAULT TRANFORMATION OF THE DATA (log(4))
+   # plot_heatmap(Euphotic_T30_all_synd, method = "NMDS", distance ="jaccard", binary = TRUE,
+   #             taxa.label = "Species", taxa.order = "Class", sample.label = "Area_U_Cast_Depth1",
+   #            low="beige", high="red", na.value="beige") +
+   #            theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 4)) +
+   #            theme(axis.text.y = element_text(size = 12))
+
+  dev.off()
+  
+# SAMPLE LABEL DEPTH
+
+  CairoPDF(file = "R.Figures/Heatmaps/Top50_euphotic_Protist_synd_March2022bis.pdf", width = 30, height = 10)
+  
+        plot_heatmap(Euphotic_T30_all_synd, method = "NMDS", distance ="jaccard", binary = TRUE, 
+               taxa.label = "Species", taxa.order = "Class", sample.label = "Sample_label_depth",
+               trans=NULL, low="beige", high="red", na.value="beige") +
+              theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 4)) +
+              theme(axis.text.y = element_text(size = 12))
+
+  dev.off()
+  
+```
+
+## LOG SCALE transformation
+
+```{r, fig.height=15, fig.width=25}
+
+## EUPHOTIC - ## data TRANSFORMATIONS  - 'log10p', 'Hellinger'
+### Select 30 the most abundant PROTIST-SYND taxa in EUPHOTIC
+   ps_protist_synd_std_eu_log <-  ps_protist_synd_std %>%  
+    #subset_samples(Project == "BiophysMoorings") %>%
+transform('log10p')
+
+
+
+  topN <- 50
+  most_abundant_taxa_synd_log <- sort(taxa_sums(ps_protist_synd_std_eu_log), TRUE)[1:topN]
+  Euphotic_T30_all_synd_log <- prune_taxa(names(most_abundant_taxa_synd_log), ps_protist_synd_std_eu_log)
+
+## AREA CAST DEPTH 
+ 
+   CairoPDF(file = "R.Figures/Heatmaps/Top50_euphotic_Protist_synd_LOG_March2022.pdf", width = 30, height = 10)
+  
+        plot_heatmap(Euphotic_T30_all_synd_log, method = "NMDS", distance ="jaccard", binary = TRUE, 
+               taxa.label = "Species", taxa.order = "Class", sample.label = "Area_U_Cast_Depth1",
+               trans=NULL, low="beige", high="red", na.value="beige") +
+              theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 4)) +
+              theme(axis.text.y = element_text(size = 12))
+
+  dev.off()
+  
+# SAMPLE LABEL DEPTH
+
+  CairoPDF(file = "R.Figures/Heatmaps/Top50_euphotic_Protist_synd_LOG_March2022.pdf", width = 30, height = 10)
+  
+        plot_heatmap(Euphotic_T30_all_synd_log, method = "NMDS", distance ="jaccard", binary = TRUE, 
+               taxa.label = "Species", taxa.order = "Class", sample.label = "Sample_label_depth",
+               trans=NULL, low="beige", high="red", na.value="beige") +
+              theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 4)) +
+              theme(axis.text.y = element_text(size = 12))
+
+  dev.off()
+  
+```
+
+### FIGURE S12 - Heatmap APHOTIC 
+# PROTIST - SYND
+
+```{r, fig.height=15, fig.width=25}
+
+## APHOTIC
+### Select 30 the most abundant PROTIST-SYND taxa in EUPHOTIC
+   ps_protist_synd_std_aphotic <-  ps_protist_synd_std %>%  
+    subset_samples(Project == "BiophysMoorings") %>%
+    subset_samples(light_layer == "Aphotic")
+  
+  topN <- 20
+  most_abundant_taxa_synd_aphotic <- sort(taxa_sums(ps_protist_synd_std_aphotic), TRUE)[1:topN]
+  Euphotic_T30_all_synd_aphotic <- prune_taxa(names(most_abundant_taxa_synd_aphotic), ps_protist_synd_std_aphotic)
+
+## AREA CAST DEPTH 
+ 
+   CairoPDF(file = "R.Figures/Heatmaps/Top20_APHOTIC_Protist_synd_March2022.pdf", width = 30, height = 10)
+  
+  #WITHOUT TRANFORMATION OF THE DATA
+  plot_heatmap(Euphotic_T30_all_synd_aphotic, method = "NMDS", distance ="jaccard", binary = TRUE,
+         taxa.label = "Species", taxa.order = "Class", sample.label = "Area_U_Cast_Depth1",
+         trans=NULL, low="beige", high="red", na.value="beige") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 4)) +
+        theme(axis.text.y = element_text(size = 12))
+        
+  # WIT THE DEFAULT TRANFORMATION OF THE DATA (log(4))
+   # plot_heatmap(Euphotic_T30_all_synd, method = "NMDS", distance ="jaccard", binary = TRUE,
+   #             taxa.label = "Species", taxa.order = "Class", sample.label = "Area_U_Cast_Depth1",
+   #            low="beige", high="red", na.value="beige") +
+   #            theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 4)) +
+   #            theme(axis.text.y = element_text(size = 12))
+
+  dev.off()
+  
+# SAMPLE LABEL DEPTH
+
+  CairoPDF(file = "R.Figures/Heatmaps/Top20_APHOTIC_Protist_synd_March2022bis.pdf", width = 30, height = 10)
+  
+        plot_heatmap(Euphotic_T30_all_synd_aphotic, method = "NMDS", distance ="jaccard", binary = TRUE, 
+               taxa.label = "Species", taxa.order = "Class", sample.label = "Sample_label_depth",
+               trans=NULL, low="beige", high="red", na.value="beige") +
+              theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 4)) +
+              theme(axis.text.y = element_text(size = 12))
+
+  dev.off()
+  
+```
+
+# PROTIST - ALL
+### FIGURE 9 BIS - Heatmap
+
+```{r, fig.height=15, fig.width=25}
+
+## EUPHOTIC
+### Select 30 the most abundant PROTIST-SYND taxa in EUPHOTIC
+   ps_protist_std_eu <-  ps_protist_std %>%  
+    #subset_samples(Project == "BiophysMoorings") %>%
+    subset_samples(light_layer == "Euphotic")
+  
+  topN <- 50
+  most_abundant_taxa_protist <- sort(taxa_sums(ps_protist_std_eu), TRUE)[1:topN]
+  Euphotic_T30_all_protist <- prune_taxa(names(most_abundant_taxa_protist), ps_protist_std_eu)
+
+## AREA CAST DEPTH 
+ 
+   CairoPDF(file = "R.Figures/Heatmaps/Top50_euphotic_Protist_ALL_OTUs_March2022.pdf", width = 30, height = 10)
+   
+# To include the species instead of otus use "taxa.label = "Species""  
+ 
+     # WITHOUT TRANFORMATION OF THE DATA
+   plot_heatmap(Euphotic_T30_all_protist, method = "NMDS", distance ="jaccard", binary = TRUE,
+           taxa.order = "Class", sample.label = "Area_U_Cast_Depth1",
+          trans=NULL, low="beige", high="red", na.value="beige") +
+         theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 4)) +
+         theme(axis.text.y = element_text(size = 12))
+        
+  # # WITH THE DEFAULT TRANFORMATION OF THE DATA (log(4))
+  #  plot_heatmap(Euphotic_T30_all_synd, method = "NMDS", distance ="jaccard", binary = TRUE,
+  #              taxa.label = "Species", taxa.order = "Class", sample.label = "Area_U_Cast_Depth1",
+  #             low="beige", high="red", na.value="beige") +
+  #             theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 4)) +
+  #             theme(axis.text.y = element_text(size = 12))
+
+  dev.off()
+  
+# SAMPLE LABEL DEPTH
+
+  CairoPDF(file = "R.Figures/Heatmaps/Top50_euphotic_Protist_ALL_March2022bis.pdf", width = 30, height = 10)
+  
+        plot_heatmap(Euphotic_T30_all_protist, method = "NMDS", distance ="jaccard", binary = TRUE, 
+               taxa.label = "Species", taxa.order = "Class", sample.label = "Sample_label_depth",
+               trans=NULL, low="beige", high="red", na.value="beige") +
+              theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 4)) +
+              theme(axis.text.y = element_text(size = 12))
+
+  dev.off()
+  
+```
+
+### FIGURE S12 BIS - Heatmap APHOTIC 
+# PROTIST - ALL
+
+```{r, fig.height=15, fig.width=25}
+
+## APHOTIC
+### Select 30 the most abundant PROTIST taxa in APHOTIC
+   ps_protist_std_aphotic <-  ps_protist_std %>%  
+    subset_samples(Project == "BiophysMoorings") %>%
+    subset_samples(light_layer == "Aphotic")
+  
+  topN <- 50
+  most_abundant_protist_taxa_aphotic <- sort(taxa_sums(ps_protist_std_aphotic), TRUE)[1:topN]
+  Euphotic_T30_all_protist_aphotic <- prune_taxa(names(most_abundant_protist_taxa_aphotic), ps_protist_std_aphotic)
+
+## AREA CAST DEPTH - To include the species instead of otus use "taxa.label = "Species""
+ 
+   CairoPDF(file = "R.Figures/Heatmaps/Top50_APHOTIC_Protist_ALL_OTUs_March2022.pdf", width = 30, height = 10)
+  
+  #WITHOUT TRANFORMATION OF THE DATA
+  plot_heatmap(Euphotic_T30_all_protist_aphotic, method = "NMDS", distance ="jaccard", binary = TRUE,
+          taxa.order = "Class", sample.label = "Area_U_Cast_Depth1",
+         trans=NULL, low="beige", high="red", na.value="beige") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 4)) +
+        theme(axis.text.y = element_text(size = 12))
+        
+  # WIT THE DEFAULT TRANFORMATION OF THE DATA (log(4))
+   # plot_heatmap(Euphotic_T30_all_synd, method = "NMDS", distance ="jaccard", binary = TRUE,
+   #             taxa.label = "Species", taxa.order = "Class", sample.label = "Area_U_Cast_Depth1",
+   #            low="beige", high="red", na.value="beige") +
+   #            theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 4)) +
+   #            theme(axis.text.y = element_text(size = 12))
+
+  dev.off()
+  
+# SAMPLE LABEL DEPTH
+
+  CairoPDF(file = "R.Figures/Heatmaps/Top50_APHOTIC_Protist_ALL_March2022bis.pdf", width = 30, height = 10)
+  
+        plot_heatmap(Euphotic_T30_all_protist_aphotic, method = "NMDS", distance ="jaccard", binary = TRUE, 
+               taxa.label = "Species", taxa.order = "Class", sample.label = "Sample_label_depth",
+               trans=NULL, low="beige", high="red", na.value="beige") +
+              theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust=1, size = 4)) +
+              theme(axis.text.y = element_text(size = 12))
+
+  dev.off()
+  
+```
+
+## DESeq analysis 
+
+## Top20 classes - OTUs - ## PROTIST -SYND
+
+## subset taxa - classes of interest only for DESeq analysis 
+
+## EUPHOTIC ###
+
+```{r pressure, echo=FALSE}
+
+## IMP ### DO NOT NORMALIZED - RAW COUNTS
+
+ps_protist_synd_eu <-   ps[["EEZ-synd"]]  %>%
+  subset_samples(light_layer== "Euphotic") 
+
+## Subset classes of interest
+## OPTION A - same as plotted in Class distribution
+
+ps_protist_synd_class.top20 = prune_taxa((tax_table(ps_protist_synd_eu)[, "Class"] %in% top20class_synd), ps_protist_synd_eu)
+  ps_protist_synd_class.top20
+  
+Class_names1 = data.frame(Class_reads = sort(taxa_sums(ps_protist_synd_class.top20), TRUE), sorted = 1:ntaxa(ps_protist_synd_class.top20), Class = tax_table(ps_protist_synd_class.top20)[, "Class" ])
+
+```
+
+## subset taxa - classes of interest only for DESeq analysis 
+
+## APHOTIC ###
+## PROTIST -SYND
+
+
+```{r pressure, echo=FALSE}
+
+## IMP ### DO NOT NORMALIZED - RAW COUNTS
+
+ps_protist_synd_aphotic <-   ps[["EEZ-synd"]]  %>%
+    subset_samples(light_layer == "Aphotic" & Project  == "BiophysMoorings") 
+
+## ## Subset classes of interest
+## OPTION A - same as plotted in Class distribution
+ps_protist_synd_class_APHOTIC.top20 = prune_taxa((tax_table(ps_protist_synd_aphotic)[, "Class"] %in% top20class_synd), ps_protist_synd_aphotic)
+  ps_protist_synd_class_APHOTIC.top20
+  
+Class_names1 = data.frame(Class_reads = sort(taxa_sums(ps_protist_synd_class_APHOTIC.top20), TRUE), sorted = 1:ntaxa(ps_protist_synd_class_APHOTIC.top20), Class = tax_table(ps_protist_synd_class_APHOTIC.top20)[, "Class" ])
+
+```
+
+## DESeq Analysis
+## EUPHOTIC
+## PROTIST -SYND
+
+You can also embed plots, for example:
+
+```{r pressure}
+# design formula
+
+diagdds = phyloseq_to_deseq2(ps_protist_synd_class.top20, ~ Water_mass.TS1)
+# select factors levels  or reference level to compare
+diagdds$Water_mass.TS1 <- factor(diagdds$Water_mass.TS1, levels = c("STW","SAW", "STF")) # select factor levels
+#diagdds$Water_mass.TS1 <- relevel(diagdds$Water_mass.TS1, ref = "STW") # reference level
+
+# calculate geometric means prior to estimate size factors
+gm_mean = function(x, na.rm=TRUE){
+  exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))
+}
+geoMeans = apply(counts(diagdds), 1, gm_mean)
+diagdds = estimateSizeFactors(diagdds, geoMeans = geoMeans)
+diagdds = DESeq(diagdds, fitType="local")
+diagdds = DESeq(diagdds, test="Wald", fitType="parametric")
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+## Investigating the results - Phyloseq comparison between WATER MASSES
+## PROTIST -SYND
+```{r pressure}
+# choose the factor and levels to compare
+resSTW.SAW = results(diagdds, cooksCutoff = FALSE, contrast=c("Water_mass.TS1", "STW", "SAW"), alpha = 0.01) 
+resSTW.STF = results(diagdds, cooksCutoff = FALSE, contrast=c("Water_mass.TS1", "STW", "STF"), alpha = 0.01) 
+resSTF.SAW = results(diagdds, cooksCutoff = FALSE, contrast=c("Water_mass.TS1", "STF", "SAW"), alpha = 0.01)
+
+# resOrdered <- resSTF[order(resSTF$pvalue),] # ordering results based on pvalue
+
+## summary of results
+summary(resSTW.SAW) 
+summary(resSTW.STF) 
+summary(resSTF.SAW) 
+
+# Number of OTUs signifincantly different 
+sum(resSTW.SAW$padj < 0.01, na.rm=TRUE)  
+sum(resSTW.STF$padj < 0.01, na.rm=TRUE) 
+sum(resSTF.SAW$padj < 0.01, na.rm=TRUE) 
+
+
+```
+
+## # organizing results in data frame for visualiation WATER MASSES
+## PROTIST -SYND
+```{r pressure}
+
+# STW.SAW
+alpha = 0.01
+sigtab_STW.SAW = resSTW.SAW[which(resSTW.SAW$padj < alpha), ]
+sigtab_STW.SAW = cbind(as(sigtab_STW.SAW, "data.frame"), as(tax_table(ps_protist_synd_eu)[rownames(sigtab_STW.SAW), ], "matrix"))
+
+sigtab_STW.SAW_otu <- sigtab_STW.SAW %>% # otus information
+  rownames_to_column("Otu") %>%
+  unite(Otu_species, Otu, Species, sep = "_", remove = FALSE)
+
+head(sigtab_STW.SAW_otu)
+dim(sigtab_STW.SAW_otu) # dimensions of the data.frame - number of OTUs significantly different
+
+# color coding for taxonomic Classes
+sigtab_STW.SAW_col <-left_join(sigtab_STW.SAW, classes_division, by=c("Class"= "class")) # join for colors
+
+color_class <- as.character(sigtab_STW.SAW_col$color_hex_class)
+names(color_class) <- as.character(sigtab_STW.SAW_col$Class)
+
+# STW.STF
+alpha = 0.01
+sigtab_STW.STF = resSTW.STF[which(resSTW.STF$padj < alpha), ]
+sigtab_STW.STF = cbind(as(sigtab_STW.STF, "data.frame"), as(tax_table(ps_protist_synd_eu)[rownames(sigtab_STW.STF), ], "matrix"))
+
+sigtab_STW.STF_otu <- sigtab_STW.STF %>% # otus information
+  rownames_to_column("Otu") %>%
+  unite(Otu_species, Otu, Species, sep = "_", remove = FALSE)
+
+head(sigtab_STW.STF)
+dim(sigtab_STW.STF) # dimensions of the data.frame - number of OTUs significantly different
+
+# color coding for taxonomic Classes
+sigtab_STW.STF_col <-left_join(sigtab_STW.STF, classes_division, by=c("Class"= "class")) # join for colors
+
+color_class <- as.character(sigtab_STW.STF_col$color_hex_class)
+names(color_class) <- as.character(sigtab_STW.STF_col$Class)
+
+# STF.SAW
+alpha = 0.01
+sigtab_STF.SAW = resSTF.SAW[which(resSTF.SAW$padj < alpha), ]
+sigtab_STF.SAW = cbind(as(sigtab_STF.SAW, "data.frame"), as(tax_table(ps_protist_synd_eu)[rownames(sigtab_STF.SAW), ], "matrix"))
+
+sigtab_STF.SAW_otu <- sigtab_STF.SAW %>% # otus information
+  rownames_to_column("Otu") %>%
+  unite(Otu_species, Otu, Species, sep = "_", remove = FALSE)
+
+head(sigtab_STF.SAW)
+dim(sigtab_STF.SAW) # dimensions of the data.frame - number of OTUs significantly different
+
+## joining with color classes
+
+# color coding for taxonomic Classes
+sigtab_STF.SAW_col <-left_join(sigtab_STF.SAW, classes_division, by=c("Class"= "class")) # join for colors
+
+color_class <- as.character(sigtab_STF.SAW_col$color_hex_class)
+names(color_class) <- as.character(sigtab_STF.SAW_col$Class)
+# sigtab_STF.SAW_col$Class = with(sigtab_STF.SAW_col, reorder(Class, -mean))
+
+```
+
+## VISUALIZING the RESULTS - Phyloseq comparison between WATER MASSES
+
+# Colors for plotting taxonomy - NOT WORKING FOR NOW - WANT TO SET THE SAME COLORS as for Bar plots - 
+
+## STW vs SAW
+## PROTIST -SYND
+```{r pressure}
+# theme_set(theme_bw())
+# scale_fill_discrete <- function(palname = "Set1", ...) {
+#     scale_fill_brewer(palette = palname, ...)
+# }
+
+# Division order
+x = tapply(sigtab_STW.SAW_col$log2FoldChange, sigtab_STW.SAW_col$Division, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.SAW_col$Division = factor(as.character(sigtab_STW.SAW_col$Division), levels=names(x))
+
+# Species order - Single species in each row (including various ASVs with potentially different distributions)
+x = tapply(sigtab_STW.SAW_col$log2FoldChange, sigtab_STW.SAW_col$Species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.SAW_col$Species = factor(as.character(sigtab_STW.SAW_col$Species), levels=names(x))
+
+# Plotting - species
+
+CairoPDF(file = "R.Figures/DESeq/DESeq_euphotic_STW_SAW_species.pdf", height = 18, width = 10) 
+ggplot(sigtab_STW.SAW_col, aes(x=Species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_colour_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs SAW - Euphotic - Protist-synd")) +
+  theme_bw() +
+  coord_flip() 
+dev.off()
+
+  ggsave("DESeq_euphotic_STW_SAW_species_Aug2021.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+  
+# OTUs order - visualizing otu_species in each row
+x = tapply(sigtab_STW.SAW_otu$log2FoldChange, sigtab_STW.SAW_otu$Otu_species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.SAW_otu$Otu_species = factor(as.character(sigtab_STW.SAW_otu$Otu_species), levels=names(x))
+
+# Plotting - otus
+CairoPDF(file = "R.Figures/DESeq/DESeq_euphotic_STW_SAW_otus.pdf", height = 18, width = 10) 
+ggplot(sigtab_STW.SAW_otu, aes(x=Otu_species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_colour_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs SAW - Euphotic - Protist-synd")) +
+  theme_bw() +
+  coord_flip() 
+dev.off()
+
+
+  ggsave("DESeq_euphotic_STW_SAW_otus_Aug2021.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+
+```
+
+## STW vs STF
+## PROTIST -SYND
+```{r pressure}
+
+
+# Species order
+x = tapply(sigtab_STW.STF_col$log2FoldChange, sigtab_STW.STF_col$Species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.STF_col$Species = factor(as.character(sigtab_STW.STF_col$Species), levels=names(x))
+
+# Plotting - species
+CairoPDF(file = "R.Figures/DESeq/DESeq_euphotic_STW_STF_species.pdf", height = 18, width = 10) 
+ggplot(sigtab_STW.STF_col, aes(x=Species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs STF - Euphotic - Protist-synd")) +
+    theme_bw() +
+   coord_flip() 
+dev.off()
+
+
+  ggsave("DESeq_euphotic_STW_STF_species_Aug2021.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+
+# OTUs order - visualizing otu_species in each row
+x = tapply(sigtab_STW.STF_otu$log2FoldChange, sigtab_STW.STF_otu$Otu_species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.STF_otu$Otu_species = factor(as.character(sigtab_STW.STF_otu$Otu_species), levels=names(x))
+
+# Plotting - otus
+CairoPDF(file = "R.Figures/DESeq/DESeq_euphotic_STW_STF_otu.pdf", height = 18, width = 10) 
+ggplot(sigtab_STW.STF_otu, aes(x=Otu_species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_color_manual(values = class_color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs STF - Euphotic - Protist-synd")) +
+    theme_bw() +
+coord_flip() 
+dev.off()
+
+
+  ggsave("DESeq_euphotic_STW_STF_otu_Aug2021.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+
+```
+
+## STF vs SAW - 
+## PROTIST -SYND
+```{r pressure}
+
+# Species order
+x = tapply(sigtab_STF.SAW_col$log2FoldChange, sigtab_STF.SAW_col$Species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STF.SAW_col$Species = factor(as.character(sigtab_STF.SAW_col$Species), levels=names(x))
+
+CairoPDF(file = "R.Figures/DESeq/DESeq_euphotic_STF_SAW.pdf", height = 18, width = 10) 
+ggplot(sigtab_STF.SAW_col, aes(x=Species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STF vs SAW - Euphotic - Protist-synd")) +
+    theme_bw() +
+coord_flip() 
+dev.off()
+
+
+  ggsave("DESeq_euphotic_STF_SAW_Aug2021.pdf", path = "R.Figures/DESeq", dpi = 300, height = 8, width = 8)
+  
+  # OTUs order - visualizing otu_species in each row
+x = tapply(sigtab_STF.SAW_otu$log2FoldChange, sigtab_STF.SAW_otu$Otu_species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STF.SAW_otu$Otu_species = factor(as.character(sigtab_STF.SAW_otu$Otu_species), levels=names(x))
+
+CairoPDF(file = "R.Figures/DESeq/DESeq_euphotic_STF_SAW_otu.pdf", height = 18, width = 10) 
+ggplot(sigtab_STF.SAW_otu, aes(x=Otu_species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_color_manual(values = class_color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STF vs SAW - Euphotic - Protist-synd")) +
+    theme_bw() +
+coord_flip() 
+dev.off()
+
+
+
+  ggsave("DESeq_euphotic_STF_SAW_otu_Aug2021.pdf", path = "R.Figures/DESeq", dpi = 300, height = 8, width = 8)
+
+```
+## DESeq analysis - 
+
+## PROTIST -SYND
+
+## Top20 classes - OTUs - 
+
+
+## APHOTIC ###################
+
+You can also embed plots, for example:
+
+```{r pressure}
+ps_protist_synd_aphotic <-  ps_protist_synd %>%  
+    subset_samples(light_layer == "Aphotic" & Project  == "BiophysMoorings") 
+
+# design formula
+diagdds = phyloseq_to_deseq2(ps_protist_synd_class_APHOTIC.top20, ~ Water_mass.TS1)
+# select factors levels  or reference level to compare
+diagdds$Water_mass.TS1 <- factor(diagdds$Water_mass.TS1, levels = c("STW","SAW", "STF")) # select factor levels
+#diagdds$Water_mass.TS1 <- relevel(diagdds$Water_mass.TS1, ref = "STW") # reference level
+
+# calculate geometric means prior to estimate size factors
+gm_mean = function(x, na.rm=TRUE){
+  exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))
+}
+geoMeans = apply(counts(diagdds), 1, gm_mean)
+diagdds = estimateSizeFactors(diagdds, geoMeans = geoMeans)
+diagdds = DESeq(diagdds, fitType="local")
+diagdds = DESeq(diagdds, test="Wald", fitType="parametric")
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+## Investigating the results - Phyloseq comparison between WATER MASSES
+## PROTIST -SYND
+```{r pressure}
+# choose the factor and levels to compare
+resSTW.SAW = results(diagdds, cooksCutoff = FALSE, contrast=c("Water_mass.TS1", "STW", "SAW"), alpha = 0.01) 
+resSTW.STF = results(diagdds, cooksCutoff = FALSE, contrast=c("Water_mass.TS1", "STW", "STF"), alpha = 0.01) 
+resSTF.SAW = results(diagdds, cooksCutoff = FALSE, contrast=c("Water_mass.TS1", "STF", "SAW"), alpha = 0.01)
+
+# resOrdered <- resSTF[order(resSTF$pvalue),] # ordering results based on pvalue
+
+## summary of results
+summary(resSTW.SAW) 
+summary(resSTW.STF) 
+summary(resSTF.SAW) 
+
+# Number of OTUs signifincantly different 
+sum(resSTW.SAW$padj < 0.01, na.rm=TRUE)  
+sum(resSTW.STF$padj < 0.01, na.rm=TRUE) 
+sum(resSTF.SAW$padj < 0.01, na.rm=TRUE) 
+
+
+
+```
+
+## # organizing results in data frame for visualiation WATER MASSES
+## PROTIST -SYND
+```{r pressure}
+
+# STW.SAW
+alpha = 0.01
+sigtab_STW.SAW = resSTW.SAW[which(resSTW.SAW$padj < alpha), ]
+sigtab_STW.SAW = cbind(as(sigtab_STW.SAW, "data.frame"), as(tax_table(ps_protist_synd_eu)[rownames(sigtab_STW.SAW), ], "matrix"))
+
+sigtab_STW.SAW_otu <- sigtab_STW.SAW %>% # otus information
+  rownames_to_column("Otu") %>%
+  unite(Otu_species, Otu, Species, sep = "_", remove = FALSE)
+
+head(sigtab_STW.SAW_otu)
+dim(sigtab_STW.SAW_otu) # dimensions of the data.frame - number of OTUs significantly different
+
+# color coding for taxonomic Classes
+sigtab_STW.SAW_col <-left_join(sigtab_STW.SAW, classes_division, by=c("Class"= "class")) # join for colors
+
+color_class <- as.character(sigtab_STW.SAW_col$color_hex_class)
+names(color_class) <- as.character(sigtab_STW.SAW_col$Class)
+
+# STW.STF
+alpha = 0.01
+sigtab_STW.STF = resSTW.STF[which(resSTW.STF$padj < alpha), ]
+sigtab_STW.STF = cbind(as(sigtab_STW.STF, "data.frame"), as(tax_table(ps_protist_synd_eu)[rownames(sigtab_STW.STF), ], "matrix"))
+
+sigtab_STW.STF_otu <- sigtab_STW.STF %>% # otus information
+  rownames_to_column("Otu") %>%
+  unite(Otu_species, Otu, Species, sep = "_", remove = FALSE)
+
+head(sigtab_STW.STF)
+dim(sigtab_STW.STF) # dimensions of the data.frame - number of OTUs significantly different
+
+# color coding for taxonomic Classes
+sigtab_STW.STF_col <-left_join(sigtab_STW.STF, classes_division, by=c("Class"= "class")) # join for colors
+
+color_class <- as.character(sigtab_STW.STF_col$color_hex_class)
+names(color_class) <- as.character(sigtab_STW.STF_col$Class)
+
+# STF.SAW
+alpha = 0.01
+sigtab_STF.SAW = resSTF.SAW[which(resSTF.SAW$padj < alpha), ]
+sigtab_STF.SAW = cbind(as(sigtab_STF.SAW, "data.frame"), as(tax_table(ps_protist_synd_eu)[rownames(sigtab_STF.SAW), ], "matrix"))
+
+sigtab_STF.SAW_otu <- sigtab_STF.SAW %>% # otus information
+  rownames_to_column("Otu") %>%
+  unite(Otu_species, Otu, Species, sep = "_", remove = FALSE)
+
+head(sigtab_STF.SAW)
+dim(sigtab_STF.SAW) # dimensions of the data.frame - number of OTUs significantly different
+
+# color coding for taxonomic Classes
+sigtab_STF.SAW_col <-left_join(sigtab_STF.SAW, classes_division, by=c("Class"= "class")) # join for colors
+
+color_class <- as.character(sigtab_STF.SAW_col$color_hex_class)
+names(color_class) <- as.character(sigtab_STF.SAW_col$Class)
+
+```
+
+
+## STW vs SAW
+## PROTIST -SYND
+```{r pressure}
+# theme_set(theme_bw())
+# scale_fill_discrete <- function(palname = "Set1", ...) {
+#     scale_fill_brewer(palette = palname, ...)
+# }
+
+# Division order
+x = tapply(sigtab_STW.SAW$log2FoldChange, sigtab_STW.SAW$Division, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.SAW$Division = factor(as.character(sigtab_STW.SAW$Division), levels=names(x))
+
+# Species order - Single species in each row (including various ASVs with potentially different distributions)
+x = tapply(sigtab_STW.SAW$log2FoldChange, sigtab_STW.SAW$Species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.SAW$Species = factor(as.character(sigtab_STW.SAW$Species), levels=names(x))
+
+# Plotting - species
+ggplot(sigtab_STW.SAW, aes(x=Species, y=log2FoldChange, color=Class)) +
+  geom_point(size=4) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs SAW - BPM-Aphotic - Protist-synd")) +
+  theme_bw() +
+  coord_flip() 
+
+  ggsave("DESeq_BPM_APHOTIC_STW_SAW_species.pdf", path = "R.Figures/DESeq", dpi = 300, height = 10, width = 8)
+  
+# OTUs order - visualizing otu_species in each row
+x = tapply(sigtab_STW.SAW_otu$log2FoldChange, sigtab_STW.SAW_otu$Otu_species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.SAW_otu$Otu_species = factor(as.character(sigtab_STW.SAW_otu$Otu_species), levels=names(x))
+
+# Plotting - otus
+ggplot(sigtab_STW.SAW_otu, aes(x=Otu_species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs SAW - BPM - Aphotic - Protist-synd")) +
+  theme_bw() +
+  coord_flip() 
+
+  ggsave("DESeq_BPM_APHOTIC_STW_SAW_otus.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+
+```
+
+## STW vs STF
+## PROTIST -SYND
+```{r pressure}
+
+
+# Species order
+x = tapply(sigtab_STW.STF$log2FoldChange, sigtab_STW.STF$Species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.STF$Species = factor(as.character(sigtab_STW.STF$Species), levels=names(x))
+
+# Plotting - species
+ggplot(sigtab_STW.STF, aes(x=Species, y=log2FoldChange, color=Class)) +
+  geom_point(size=5) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs STF - BPM-Aphotic - Protist-synd")) +
+    theme_bw() +
+   coord_flip() 
+
+  ggsave("DESeq_BPM_APHOTIC_STW_STF_species.pdf", path = "R.Figures/DESeq", dpi = 300, height = 10, width = 8)
+
+# OTUs order - visualizing otu_species in each row
+x = tapply(sigtab_STW.STF_otu$log2FoldChange, sigtab_STW.STF_otu$Otu_species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.STF_otu$Otu_species = factor(as.character(sigtab_STW.STF_otu$Otu_species), levels=names(x))
+
+# Plotting - otus
+ggplot(sigtab_STW.STF_otu, aes(x=Otu_species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs STF - BPM-Aphotic - Protist-synd")) +
+    theme_bw() +
+coord_flip() 
+
+  ggsave("DESeq_BPM_APHOTIC_STW_STF_otu.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+
+```
+
+## STF vs SAW
+## PROTIST -SYND
+```{r pressure}
+
+# Species order
+x = tapply(sigtab_STF.SAW$log2FoldChange, sigtab_STF.SAW$Species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STF.SAW$Species = factor(as.character(sigtab_STF.SAW$Species), levels=names(x))
+
+ggplot(sigtab_STF.SAW, aes(x=Species, y=log2FoldChange, color=Class)) +
+  geom_point(size=4) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STF vs SAW - BPM-Aphotic - Protist-synd")) +
+    theme_bw() +
+coord_flip() 
+
+
+  ggsave("DESeq_BPM_APHOTIC_STF_SAW_species.pdf", path = "R.Figures/DESeq", dpi = 300, height = 8, width = 8)
+  
+  # OTUs order - visualizing otu_species in each row
+x = tapply(sigtab_STF.SAW_otu$log2FoldChange, sigtab_STF.SAW_otu$Otu_species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STF.SAW_otu$Otu_species = factor(as.character(sigtab_STF.SAW_otu$Otu_species), levels=names(x))
+
+ggplot(sigtab_STF.SAW_otu, aes(x=Otu_species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STF vs SAW - BPM-Aphotic - Protist-synd")) +
+    theme_bw() +
+coord_flip() 
+
+
+  ggsave("DESeq_BPM_APHOTIC_STF_SAW_otu.pdf", path = "R.Figures/DESeq", dpi = 300, height = 8, width = 8)
+
+```
+
+
+## DESeq analysis - ## PROTIST ALL
+
+## Top20 classes - OTUs - 
+
+## subset taxa - classes of interest only for DESeq analysis 
+
+## EUPHOTIC ###
+
+```{r pressure, echo=FALSE}
+
+## IMP ### DO NOT NORMALIZED - RAW COUNTS
+
+ps_protist_eu <-   ps[["EEZ"]]  %>%
+  subset_samples(light_layer== "Euphotic") 
+
+## Subset classes of interest
+## OPTION A - same as plotted in Class distribution
+
+ps_protist_class.top20 = prune_taxa((tax_table(ps_protist_eu)[, "Class"] %in% top20class_protist), ps_protist_eu)
+  ps_protist_class.top20
+  
+Class_names1 = data.frame(Class_reads = sort(taxa_sums(ps_protist_class.top20), TRUE), sorted = 1:ntaxa(ps_protist_class.top20), Class = tax_table(ps_protist_class.top20)[, "Class" ])
+
+```
+
+## subset taxa - classes of interest only for DESeq analysis 
+
+## APHOTIC ###
+## PROTIST ALL
+
+```{r pressure, echo=FALSE}
+
+## IMP ### DO NOT NORMALIZED - RAW COUNTS
+
+ps_protist_aphotic <-   ps[["EEZ"]]  %>%
+    subset_samples(light_layer == "Aphotic" & Project  == "BiophysMoorings") 
+
+## ## Subset classes of interest
+## OPTION A - same as plotted in Class distribution
+ps_protist_class_APHOTIC.top20 = prune_taxa((tax_table(ps_protist_aphotic)[, "Class"] %in% top20class_protist), ps_protist_aphotic)
+  ps_protist_class_APHOTIC.top20
+  
+Class_names1 = data.frame(Class_reads = sort(taxa_sums(ps_protist_class_APHOTIC.top20), TRUE), sorted = 1:ntaxa(ps_protist_class_APHOTIC.top20), Class = tax_table(ps_protist_class_APHOTIC.top20)[, "Class" ])
+
+```
+
+## DESeq Analysis
+## EUPHOTIC
+## PROTIST ALL
+You can also embed plots, for example:
+
+```{r pressure}
+# design formula
+
+diagdds = phyloseq_to_deseq2(ps_protist_class.top20, ~ Water_mass.TS1)
+# select factors levels  or reference level to compare
+diagdds$Water_mass.TS1 <- factor(diagdds$Water_mass.TS1, levels = c("STW","SAW", "STF")) # select factor levels
+#diagdds$Water_mass.TS1 <- relevel(diagdds$Water_mass.TS1, ref = "STW") # reference level
+
+# calculate geometric means prior to estimate size factors
+gm_mean = function(x, na.rm=TRUE){
+  exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))
+}
+geoMeans = apply(counts(diagdds), 1, gm_mean)
+diagdds = estimateSizeFactors(diagdds, geoMeans = geoMeans)
+diagdds = DESeq(diagdds, fitType="local")
+diagdds = DESeq(diagdds, test="Wald", fitType="parametric")
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+## Investigating the results - Phyloseq comparison between WATER MASSES
+## PROTIST ALL
+
+```{r pressure}
+# choose the factor and levels to compare
+resSTW.SAW = results(diagdds, cooksCutoff = FALSE, contrast=c("Water_mass.TS1", "STW", "SAW"), alpha = 0.01) 
+resSTW.STF = results(diagdds, cooksCutoff = FALSE, contrast=c("Water_mass.TS1", "STW", "STF"), alpha = 0.01) 
+resSTF.SAW = results(diagdds, cooksCutoff = FALSE, contrast=c("Water_mass.TS1", "STF", "SAW"), alpha = 0.01)
+
+# resOrdered <- resSTF[order(resSTF$pvalue),] # ordering results based on pvalue
+
+## summary of results
+summary(resSTW.SAW) 
+summary(resSTW.STF) 
+summary(resSTF.SAW) 
+
+# Number of OTUs signifincantly different 
+sum(resSTW.SAW$padj < 0.01, na.rm=TRUE)  
+sum(resSTW.STF$padj < 0.01, na.rm=TRUE) 
+sum(resSTF.SAW$padj < 0.01, na.rm=TRUE) 
+
+
+```
+
+## # organizing results in data frame for visualiation WATER MASSES
+## PROTIST ALL
+
+```{r pressure}
+
+# STW.SAW
+alpha = 0.01
+sigtab_STW.SAW = resSTW.SAW[which(resSTW.SAW$padj < alpha), ]
+sigtab_STW.SAW = cbind(as(sigtab_STW.SAW, "data.frame"), as(tax_table(ps_protist_eu)[rownames(sigtab_STW.SAW), ], "matrix"))
+
+sigtab_STW.SAW_otu <- sigtab_STW.SAW %>% # otus information
+  rownames_to_column("Otu") %>%
+  unite(Otu_species, Otu, Species, sep = "_", remove = FALSE)
+
+head(sigtab_STW.SAW_otu)
+dim(sigtab_STW.SAW_otu) # dimensions of the data.frame - number of OTUs significantly different
+
+# color coding for taxonomic Classes
+sigtab_STW.SAW_col <-left_join(sigtab_STW.SAW, classes_division, by=c("Class"= "class")) # join for colors
+
+color_class <- as.character(sigtab_STW.SAW_col$color_hex_class)
+names(color_class) <- as.character(sigtab_STW.SAW_col$Class)
+
+# STW.STF
+alpha = 0.01
+sigtab_STW.STF = resSTW.STF[which(resSTW.STF$padj < alpha), ]
+sigtab_STW.STF = cbind(as(sigtab_STW.STF, "data.frame"), as(tax_table(ps_protist_eu)[rownames(sigtab_STW.STF), ], "matrix"))
+
+sigtab_STW.STF_otu <- sigtab_STW.STF %>% # otus information
+  rownames_to_column("Otu") %>%
+  unite(Otu_species, Otu, Species, sep = "_", remove = FALSE)
+
+head(sigtab_STW.STF)
+dim(sigtab_STW.STF) # dimensions of the data.frame - number of OTUs significantly different
+
+# color coding for taxonomic Classes
+sigtab_STW.STF_col <-left_join(sigtab_STW.STF, classes_division, by=c("Class"= "class")) # join for colors
+
+color_class <- as.character(sigtab_STW.STF_col$color_hex_class)
+names(color_class) <- as.character(sigtab_STW.STF_col$Class)
+
+# STF.SAW
+alpha = 0.01
+sigtab_STF.SAW = resSTF.SAW[which(resSTF.SAW$padj < alpha), ]
+sigtab_STF.SAW = cbind(as(sigtab_STF.SAW, "data.frame"), as(tax_table(ps_protist_eu)[rownames(sigtab_STF.SAW), ], "matrix"))
+
+sigtab_STF.SAW_otu <- sigtab_STF.SAW %>% # otus information
+  rownames_to_column("Otu") %>%
+  unite(Otu_species, Otu, Species, sep = "_", remove = FALSE)
+
+head(sigtab_STF.SAW)
+dim(sigtab_STF.SAW) # dimensions of the data.frame - number of OTUs significantly different
+
+## joining with color classes
+
+# color coding for taxonomic Classes
+sigtab_STF.SAW_col <-left_join(sigtab_STF.SAW, classes_division, by=c("Class"= "class")) # join for colors
+
+color_class <- as.character(sigtab_STF.SAW_col$color_hex_class)
+names(color_class) <- as.character(sigtab_STF.SAW_col$Class)
+# sigtab_STF.SAW_col$Class = with(sigtab_STF.SAW_col, reorder(Class, -mean))
+
+```
+
+## VISUALIZING the RESULTS - Phyloseq comparison between WATER MASSES
+
+# Colors for plotting taxonomy - NOT WORKING FOR NOW - WANT TO SET THE SAME COLORS as for Bar plots - 
+
+## STW vs SAW
+## PROTIST ALL
+
+```{r pressure}
+# theme_set(theme_bw())
+# scale_fill_discrete <- function(palname = "Set1", ...) {
+#     scale_fill_brewer(palette = palname, ...)
+# }
+
+# Division order
+x = tapply(sigtab_STW.SAW_col$log2FoldChange, sigtab_STW.SAW_col$Division, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.SAW_col$Division = factor(as.character(sigtab_STW.SAW_col$Division), levels=names(x))
+
+# Species order - Single species in each row (including various ASVs with potentially different distributions)
+x = tapply(sigtab_STW.SAW_col$log2FoldChange, sigtab_STW.SAW_col$Species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.SAW_col$Species = factor(as.character(sigtab_STW.SAW_col$Species), levels=names(x))
+
+# Plotting - species
+
+CairoPDF(file = "R.Figures/DESeq/DESeq_PROTIST_ALL_euphotic_STW_SAW_species_March2022.pdf", height = 18, width = 10) 
+ggplot(sigtab_STW.SAW_col, aes(x=Species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_colour_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs SAW - Euphotic - Protist-ALL")) +
+  theme_bw() +
+  coord_flip() 
+dev.off()
+
+  ggsave("DESeq_PROTIST_ALL_euphotic_STW_SAW_species_March2022.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+  
+# OTUs order - visualizing otu_species in each row
+x = tapply(sigtab_STW.SAW_otu$log2FoldChange, sigtab_STW.SAW_otu$Otu_species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.SAW_otu$Otu_species = factor(as.character(sigtab_STW.SAW_otu$Otu_species), levels=names(x))
+
+# Plotting - otus
+CairoPDF(file = "R.Figures/DESeq/DESeq_PROTIST_ALL_euphotic_STW_SAW_otus_March2022.pdf", height = 18, width = 10) 
+ggplot(sigtab_STW.SAW_otu, aes(x=Otu_species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_colour_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs SAW - Euphotic - PROTIST ALL")) +
+  theme_bw() +
+  coord_flip() 
+dev.off()
+
+
+  ggsave("DESeq_PROTIST_ALL_euphotic_STW_SAW_otus_March2022.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+
+```
+
+## STW vs STF
+## PROTIST ALL
+
+```{r pressure}
+
+
+# Species order
+x = tapply(sigtab_STW.STF_col$log2FoldChange, sigtab_STW.STF_col$Species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.STF_col$Species = factor(as.character(sigtab_STW.STF_col$Species), levels=names(x))
+
+# Plotting - species
+CairoPDF(file = "R.Figures/DESeq/DESeq_PROTIST_ALL_euphotic_STW_STF_species_March2022.pdf", height = 18, width = 10) 
+ggplot(sigtab_STW.STF_col, aes(x=Species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs STF - Euphotic - PROTIST ALL ")) +
+    theme_bw() +
+   coord_flip() 
+dev.off()
+
+
+  ggsave("DESeq_PROTIST_ALL_euphotic_STW_STF_species_March2022.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+
+# OTUs order - visualizing otu_species in each row
+x = tapply(sigtab_STW.STF_otu$log2FoldChange, sigtab_STW.STF_otu$Otu_species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.STF_otu$Otu_species = factor(as.character(sigtab_STW.STF_otu$Otu_species), levels=names(x))
+
+# Plotting - otus
+CairoPDF(file = "R.Figures/DESeq/DESeq_PROTIST_ALL_euphotic_STW_STF_otu_March2022.pdf", height = 18, width = 10) 
+ggplot(sigtab_STW.STF_otu, aes(x=Otu_species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_color_manual(values = class_color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs STF - Euphotic - PROTIST ALL")) +
+    theme_bw() +
+coord_flip() 
+dev.off()
+
+
+  ggsave("DESeq_PROTIST_ALL_euphotic_STW_STF_otu_March2022.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+
+```
+
+## STF vs SAW - 
+## PROTIST ALL
+
+```{r pressure}
+
+# Species order
+x = tapply(sigtab_STF.SAW_col$log2FoldChange, sigtab_STF.SAW_col$Species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STF.SAW_col$Species = factor(as.character(sigtab_STF.SAW_col$Species), levels=names(x))
+
+CairoPDF(file = "R.Figures/DESeq/DESeq_PROTIST_ALL_euphotic_STF_SAW_March2022.pdf", height = 18, width = 10) 
+ggplot(sigtab_STF.SAW_col, aes(x=Species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STF vs SAW - Euphotic - Protist-synd")) +
+    theme_bw() +
+coord_flip() 
+dev.off()
+
+
+  ggsave("DESeq_PROTIST_ALL_euphotic_STF_SAW_species_March2022.pdf", path = "R.Figures/DESeq", dpi = 300, height = 8, width = 8)
+  
+  # OTUs order - visualizing otu_species in each row
+x = tapply(sigtab_STF.SAW_otu$log2FoldChange, sigtab_STF.SAW_otu$Otu_species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STF.SAW_otu$Otu_species = factor(as.character(sigtab_STF.SAW_otu$Otu_species), levels=names(x))
+
+CairoPDF(file = "R.Figures/DESeq/DESeq_euphotic_STF_SAW_otu.pdf", height = 18, width = 10) 
+ggplot(sigtab_STF.SAW_otu, aes(x=Otu_species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_color_manual(values = class_color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STF vs SAW - Euphotic - Protist-synd")) +
+    theme_bw() +
+coord_flip() 
+dev.off()
+
+
+
+  ggsave("DESeq_euphotic_STF_SAW_otu_Aug2021.pdf", path = "R.Figures/DESeq", dpi = 300, height = 8, width = 8)
+
+```
+## DESeq analysis - 
+
+## PROTIST ALL
+
+## Top20 classes - OTUs - 
+
+
+## APHOTIC ###################
+
+You can also embed plots, for example:
+
+```{r pressure}
+ps_protist_aphotic <-  ps_protist %>%  
+    subset_samples(light_layer == "Aphotic" & Project  == "BiophysMoorings") 
+
+# design formula
+diagdds = phyloseq_to_deseq2(ps_protist_class_APHOTIC.top20, ~ Water_mass.TS1)
+# select factors levels  or reference level to compare
+diagdds$Water_mass.TS1 <- factor(diagdds$Water_mass.TS1, levels = c("STW","SAW", "STF")) # select factor levels
+#diagdds$Water_mass.TS1 <- relevel(diagdds$Water_mass.TS1, ref = "STW") # reference level
+
+# calculate geometric means prior to estimate size factors
+gm_mean = function(x, na.rm=TRUE){
+  exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))
+}
+geoMeans = apply(counts(diagdds), 1, gm_mean)
+diagdds = estimateSizeFactors(diagdds, geoMeans = geoMeans)
+diagdds = DESeq(diagdds, fitType="local")
+diagdds = DESeq(diagdds, test="Wald", fitType="parametric")
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+## Investigating the results - Phyloseq comparison between WATER MASSES
+## PROTIST ALL
+
+```{r pressure}
+# choose the factor and levels to compare
+resSTW.SAW = results(diagdds, cooksCutoff = FALSE, contrast=c("Water_mass.TS1", "STW", "SAW"), alpha = 0.01) 
+resSTW.STF = results(diagdds, cooksCutoff = FALSE, contrast=c("Water_mass.TS1", "STW", "STF"), alpha = 0.01) 
+resSTF.SAW = results(diagdds, cooksCutoff = FALSE, contrast=c("Water_mass.TS1", "STF", "SAW"), alpha = 0.01)
+
+# resOrdered <- resSTF[order(resSTF$pvalue),] # ordering results based on pvalue
+
+## summary of results
+summary(resSTW.SAW) 
+summary(resSTW.STF) 
+summary(resSTF.SAW) 
+
+# Number of OTUs signifincantly different 
+sum(resSTW.SAW$padj < 0.01, na.rm=TRUE)  
+sum(resSTW.STF$padj < 0.01, na.rm=TRUE) 
+sum(resSTF.SAW$padj < 0.01, na.rm=TRUE) 
+
+
+
+```
+
+## # organizing results in data frame for visualiation WATER MASSES
+## PROTIST ALL
+
+```{r pressure}
+
+# STW.SAW
+alpha = 0.01
+sigtab_STW.SAW = resSTW.SAW[which(resSTW.SAW$padj < alpha), ]
+sigtab_STW.SAW = cbind(as(sigtab_STW.SAW, "data.frame"), as(tax_table(ps_protist_aphotic)[rownames(sigtab_STW.SAW), ], "matrix"))
+
+sigtab_STW.SAW_otu <- sigtab_STW.SAW %>% # otus information
+  rownames_to_column("Otu") %>%
+  unite(Otu_species, Otu, Species, sep = "_", remove = FALSE)
+
+head(sigtab_STW.SAW_otu)
+dim(sigtab_STW.SAW_otu) # dimensions of the data.frame - number of OTUs significantly different
+
+# color coding for taxonomic Classes
+sigtab_STW.SAW_col <-left_join(sigtab_STW.SAW, classes_division, by=c("Class"= "class")) # join for colors
+
+color_class <- as.character(sigtab_STW.SAW_col$color_hex_class)
+names(color_class) <- as.character(sigtab_STW.SAW_col$Class)
+
+# STW.STF
+alpha = 0.01
+sigtab_STW.STF = resSTW.STF[which(resSTW.STF$padj < alpha), ]
+sigtab_STW.STF = cbind(as(sigtab_STW.STF, "data.frame"), as(tax_table(ps_protist_aphotic)[rownames(sigtab_STW.STF), ], "matrix"))
+
+sigtab_STW.STF_otu <- sigtab_STW.STF %>% # otus information
+  rownames_to_column("Otu") %>%
+  unite(Otu_species, Otu, Species, sep = "_", remove = FALSE)
+
+head(sigtab_STW.STF)
+dim(sigtab_STW.STF) # dimensions of the data.frame - number of OTUs significantly different
+
+# color coding for taxonomic Classes
+sigtab_STW.STF_col <-left_join(sigtab_STW.STF, classes_division, by=c("Class"= "class")) # join for colors
+
+color_class <- as.character(sigtab_STW.STF_col$color_hex_class)
+names(color_class) <- as.character(sigtab_STW.STF_col$Class)
+
+# STF.SAW
+alpha = 0.01
+sigtab_STF.SAW = resSTF.SAW[which(resSTF.SAW$padj < alpha), ]
+sigtab_STF.SAW = cbind(as(sigtab_STF.SAW, "data.frame"), as(tax_table(ps_protist_aphotic)[rownames(sigtab_STF.SAW), ], "matrix"))
+
+sigtab_STF.SAW_otu <- sigtab_STF.SAW %>% # otus information
+  rownames_to_column("Otu") %>%
+  unite(Otu_species, Otu, Species, sep = "_", remove = FALSE)
+
+head(sigtab_STF.SAW)
+dim(sigtab_STF.SAW) # dimensions of the data.frame - number of OTUs significantly different
+
+# color coding for taxonomic Classes
+sigtab_STF.SAW_col <-left_join(sigtab_STF.SAW, classes_division, by=c("Class"= "class")) # join for colors
+
+color_class <- as.character(sigtab_STF.SAW_col$color_hex_class)
+names(color_class) <- as.character(sigtab_STF.SAW_col$Class)
+
+```
+
+
+## STW vs SAW
+## PROTIST ALL
+
+```{r pressure}
+# theme_set(theme_bw())
+# scale_fill_discrete <- function(palname = "Set1", ...) {
+#     scale_fill_brewer(palette = palname, ...)
+# }
+
+# Division order
+x = tapply(sigtab_STW.SAW$log2FoldChange, sigtab_STW.SAW$Division, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.SAW$Division = factor(as.character(sigtab_STW.SAW$Division), levels=names(x))
+
+# Species order - Single species in each row (including various ASVs with potentially different distributions)
+x = tapply(sigtab_STW.SAW$log2FoldChange, sigtab_STW.SAW$Species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.SAW$Species = factor(as.character(sigtab_STW.SAW$Species), levels=names(x))
+
+# Plotting - species
+ggplot(sigtab_STW.SAW, aes(x=Species, y=log2FoldChange, color=Class)) +
+  geom_point(size=4) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs SAW - BPM-Aphotic - PROTIST ALL")) +
+  theme_bw() +
+  coord_flip() 
+
+  ggsave("DESeq_PROTIST_ALL_BPM_APHOTIC_STW_SAW_species_March2022.pdf", path = "R.Figures/DESeq", dpi = 300, height = 10, width = 8)
+  
+# OTUs order - visualizing otu_species in each row
+x = tapply(sigtab_STW.SAW_otu$log2FoldChange, sigtab_STW.SAW_otu$Otu_species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.SAW_otu$Otu_species = factor(as.character(sigtab_STW.SAW_otu$Otu_species), levels=names(x))
+
+# Plotting - otus
+ggplot(sigtab_STW.SAW_otu, aes(x=Otu_species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs SAW - BPM - Aphotic - PROTIST ALL")) +
+  theme_bw() +
+  coord_flip() 
+
+  ggsave("DESeq_PROTIST_ALL_BPM_APHOTIC_STW_SAW_otus_March2022.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+
+```
+
+## STW vs STF
+## PROTIST ALL
+
+```{r pressure}
+
+
+# Species order
+x = tapply(sigtab_STW.STF$log2FoldChange, sigtab_STW.STF$Species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.STF$Species = factor(as.character(sigtab_STW.STF$Species), levels=names(x))
+
+# Plotting - species
+ggplot(sigtab_STW.STF, aes(x=Species, y=log2FoldChange, color=Class)) +
+  geom_point(size=5) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs STF - BPM-Aphotic - PROTIST ALL")) +
+    theme_bw() +
+   coord_flip() 
+
+  ggsave("DESeq_PROTIST_ALL_BPM_APHOTIC_STW_STF_species_March2022.pdf", path = "R.Figures/DESeq", dpi = 300, height = 10, width = 8)
+
+# OTUs order - visualizing otu_species in each row
+x = tapply(sigtab_STW.STF_otu$log2FoldChange, sigtab_STW.STF_otu$Otu_species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STW.STF_otu$Otu_species = factor(as.character(sigtab_STW.STF_otu$Otu_species), levels=names(x))
+
+# Plotting - otus
+ggplot(sigtab_STW.STF_otu, aes(x=Otu_species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STW vs STF - BPM-Aphotic - PROTIST ALL")) +
+    theme_bw() +
+coord_flip() 
+
+  ggsave("DESeq_PROTIST_ALL_BPM_APHOTIC_STW_STF_otu_March2022.pdf", path = "R.Figures/DESeq", dpi = 300, height = 18, width = 10)
+
+```
+
+## STF vs SAW
+## PROTIST ALL
+
+```{r pressure}
+
+# Species order
+x = tapply(sigtab_STF.SAW$log2FoldChange, sigtab_STF.SAW$Species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STF.SAW$Species = factor(as.character(sigtab_STF.SAW$Species), levels=names(x))
+
+ggplot(sigtab_STF.SAW, aes(x=Species, y=log2FoldChange, color=Class)) +
+  geom_point(size=4) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STF vs SAW - BPM-Aphotic - PROTIST ALL")) +
+    theme_bw() +
+coord_flip() 
+
+
+  ggsave("DESeq_PROTIST_ALL_BPM_APHOTIC_STF_SAW_species_March2022.pdf", path = "R.Figures/DESeq", dpi = 300, height = 8, width = 8)
+  
+  # OTUs order - visualizing otu_species in each row
+x = tapply(sigtab_STF.SAW_otu$log2FoldChange, sigtab_STF.SAW_otu$Otu_species, function(x) max(x))
+x = sort(-x, TRUE)
+sigtab_STF.SAW_otu$Otu_species = factor(as.character(sigtab_STF.SAW_otu$Otu_species), levels=names(x))
+
+ggplot(sigtab_STF.SAW_otu, aes(x=Otu_species, y=log2FoldChange, color=Class)) +
+  geom_point(size=2) + 
+  scale_color_manual(values = color_class) +
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle(paste (" STF vs SAW - BPM-Aphotic - PROTIST ALL")) +
+    theme_bw() +
+coord_flip() 
+
+
+  ggsave("DESeq_PROTIST_ALL_BPM_APHOTIC_STF_SAW_otu_March2022.pdf", path = "R.Figures/DESeq", dpi = 300, height = 8, width = 8)
+
+```
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

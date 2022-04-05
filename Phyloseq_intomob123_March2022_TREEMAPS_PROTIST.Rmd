@@ -1,0 +1,1550 @@
+---
+title: "TREEMAPS - PHYLOSEQ - CATALYST"
+author: "Andres"
+date: "14/05/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Libraries
+
+```{r cars}
+  library(stringr)
+   library(ggplot2)
+   library(dplyr)
+   library(tidyr)
+   library(tibble)
+   library(readr)
+   library(maps)
+   library(glue)
+   library("cowplot")
+   library("treemapify")
+library("Cairo")
+library("cairoDevice")
+library("readxl")
+library("openxlsx")
+library("gplots")
+library(forcats)
+library(mgcv)
+   library(phyloseq)
+library(data.table)
+library(viridis)
+library(plotrix)
+
+   # library(pr2database)
+   # data("pr2")
+```
+
+#Load the phyloseq files
+
+```{r pressure, echo=FALSE}
+  
+  ps <- list()
+  ps[["all"]] <- readRDS("intomob123_phyloseq_15March2022_RANKED_seawater.rds") 
+  
+```
+  
+
+# Split samples into subsets - Sample types
+
+```{r pressure, echo=FALSE}
+  #Very important, must remove taxa that are not present in one sample set
+  #creating sample_types
+  sample_types = c("Seawater", "Trap", "Sediment")
+  
+  ps[["Seawater"]] <-  ps[["all"]] %>%  
+    subset_samples(Sample_Type == "Seawater")
+  ps[["Trap"]] <-  ps[["all"]] %>%  
+    subset_samples(Sample_Type == "Trap")
+  ps[["Sediment"]] <-  ps[["all"]] %>%  
+    subset_samples(Sample_Type == "Sediment")
+  
+  sample_sums( ps[["Seawater"]])
+  median(sample_sums( ps[["Seawater"]]))
+
+```
+
+
+##Subsampled object - Only seawater samples - remove data missing metadata
+```{r}
+
+ps[["EEZ"]] <- ps[["Seawater"]] %>%
+              subset_samples(Sampling_Type != "Blank" ) %>%
+              subset_samples(Water_mass.TS1 != "ANT" )   ### Remove antarctic samples but keep subantarctic samples from antarctic TAN1802 trip
+              #subset_samples(Project != "SOAP") %>% 
+              #subset_samples(Project != "Bay of Plenty") ## remove samples from these voyages until I get the metadata (CTD, Nutrients and Chla) completed - if I{ dont receive those data I am inclined to leave these samples out of the analysis completely 
+              
+median(sample_sums(ps[["EEZ"]]))
+
+```
+
+# Filtration based on Taxonomy - for Protist, Protist-synd and Phyto
+## I am doing this filtration later in the workflow - but not sure whether it matters doing it before or after normalizing the number of reads to the median sequencing depth or not.
+
+```{r pressure, echo=FALSE}
+  # Remove Metazoa
+  # Remove Fungi
+
+## ALL eukaryotes
+ps[["EEZ-euk"]] <- ps[["seawater"]] 
+
+## Protist
+  ps[["EEZ"]] <- ps[["EEZ"]] %>% 
+        subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) 
+
+  ## Protist - syndiniales and sarcomonadae
+  ps[["EEZ-synd"]] <- ps[["EEZ"]] %>% 
+        subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) %>%
+      subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+  
+  ## Phyto
+  ps[["EEZ-phyto"]] <- ps[["EEZ"]] %>%
+        subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) %>%
+        subset_taxa(Division %in% c("Chlorophyta", "Dinoflagellata", "Cryptophyta", "Haptophyta", "Ochrophyta", "Cercozoa")) %>%
+        subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+
+
+get_taxa_unique(ps[["EEZ"]], "Class")
+
+
+```
+
+
+
+# Split SEAWATER samples into subsets - Water_mass.TS1
+
+```{r pressure, echo=FALSE}
+  #Very important, must remove taxa that are not present in one sample set
+  #creating sample_types
+  Water_mass.TS1 = c("STW", "STF", "SAW")
+
+  ps[["STW"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Water_mass.TS1 == "STW")
+  ps[["STF"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Water_mass.TS1 == "STF")
+  ps[["SAW"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Water_mass.TS1 == "SAW")
+  #ps[["ANT"]] <-  ps[["Seawater"]] %>%  
+    #subset_samples(Water_mass.TS1 == "ANT")
+  
+  
+ # Median number of reads in samples across different water masses
+  for (one_sample_type in Water_mass.TS1) {
+    
+    
+      nnn <- median(sample_sums(ps[[one_sample_type]])  )
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(nnn)
+      cat("============================\n")
+      
+  }
+  
+  # Remove ASVs that are not present in the dataset
+  for (one_sample_type in Water_mass.TS1) {
+
+      ps[[one_sample_type]] <- ps[[one_sample_type]] %>% 
+        filter_taxa(function(x) sum(x) > 0 , TRUE) 
+      
+     
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(ps[[one_sample_type]] )
+      cat("============================\n")
+      
+  }
+```
+# Split SEAWATER samples into subsets - AREAS
+
+```{r pressure, echo=FALSE}
+  #Very important, must remove taxa that are not present in one sample set
+  #creating sample_types
+ area = c("Bio-SAM", "Bio-STF", "ChathamRise", "Bio-STM",  "Campbell Plateau", "Cross-shelf", "STW SpringBloom", "SAF")
+
+  #ps[["RossSea_SO"]] <-  ps[["Seawater"]] %>%  
+   # subset_samples(Area == "RossSea_SO")
+  ps[["SAF"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Area2 == "SAF")
+  ps[["Campbell Plateau"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Area2 == "Campbell Plateau")
+  ps[["Bio-SAM"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Area2 == "Bio-SAM")
+  ps[["ChathamRise"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Area2 == "ChathamRise")
+  ps[["Bio-STF"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Area2 == "Bio-STF")
+  ps[["Bio-STM"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Area2 == "Bio-STM")
+  ps[["STW SpringBloom"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Area2 == "STW SpringBloom")
+  ps[["Cross-shelf"]] <-  ps[["EEZ"]] %>%  
+    subset_samples(Area2 == "Cross-shelf")
+   
+  #ps[["Bay of Plenty"]] <-  ps[["EEZ"]] %>%  
+   # subset_samples(Area2 == "Bay of Plenty")
+  #ps[["SOAP"]] <-  ps[["EEZ"]] %>%  
+   # subset_samples(Area2 == "SOAP")
+  
+  
+# Median number of reads in samples across different water masses
+  for (one_sample_type in area) {
+    
+    
+      nnn <- median(sample_sums(ps[[one_sample_type]])  )
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(nnn)
+      cat("============================\n")
+      
+  }
+  
+  
+  #Remove ASVs that are not present in the dataset
+  for (one_sample_type in area) {
+
+      ps[[one_sample_type]] <- ps[[one_sample_type]] %>% 
+        filter_taxa(function(x) sum(x) > 0 , TRUE) 
+      
+     
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(ps[[one_sample_type]] )
+      cat("=========================\n")
+      
+  }
+  
+```
+
+# Showing phyloseq objects
+
+```{r pressure, echo=FALSE}
+# Seawater_otu <- data.frame(otu_table(ps[["Seawater"]]))
+# Seawater_table <- data.frame(tax_table(ps[["Seawater"]])) 
+# Seawater_data <- data.frame(sample_data(ps[["Seawater"]]))
+# 
+# STW_otu <- data.frame(otu_table(ps[["STW"]]))
+# STW_table <- data.frame(tax_table(ps[["STW"]])) 
+# STW_data <- data.frame(sample_data(ps[["STW"]]))
+# 
+# STF_otu <- data.frame(otu_table(ps[["STF"]]))
+# STF_table <- data.frame(tax_table(ps[["STF"]])) 
+# STF_data <- data.frame(sample_data(ps[["STF"]]))
+# 
+# SAW_otu <- data.frame(otu_table(ps[["SAW"]]))
+# SAW_table <- data.frame(tax_table(ps[["SAW"]])) 
+# SAW_data <- data.frame(sample_data(ps[["SAW"]]))
+# 
+# # ANT_otu <- data.frame(otu_table(ps[["ANT"]]))
+# # ANT_table <- data.frame(tax_table(ps[["ANT"]])) 
+# # ANT_data <- data.frame(sample_data(ps[["ANT"]]))
+```
+
+# Filtration based on Taxonomy - for Protist
+
+```{r pressure, echo=FALSE}
+#   # Remove Metazoa
+#   # Remove Fungi
+# #Could be done earlier for seawater ps as well before splitting this into multiple ps
+# 
+#   for (one_sample_type in sample_types) {
+# 
+#       ps[[one_sample_type]] <- ps[[one_sample_type]] %>% 
+#         subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) 
+# 
+#       print(glue("Phyloseq - {one_sample_type}"))
+#       print(ps[[one_sample_type]] )
+#       cat("============================\n")
+#       
+#   }
+# 
+# 
+#  for (one_sample_type in Water_mass.TS1) {
+# 
+#       ps[[one_sample_type]] <- ps[[one_sample_type]] %>% 
+#         subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) 
+#       
+#       print(glue("Phyloseq - {one_sample_type}"))
+#       print(ps[[one_sample_type]] )
+#       cat("============================\n")
+#       
+#  }
+# 
+#  for (one_sample_type in area) {
+# 
+#       ps[[one_sample_type]] <- ps[[one_sample_type]] %>% 
+#         subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) 
+#       
+#       print(glue("Phyloseq - {one_sample_type}"))
+#       print(ps[[one_sample_type]] )
+#       cat("============================\n")
+#       
+#  }
+# 
+#  # Median number of reads in samples across different AREA
+#   for (one_sample_type in area) {
+#     
+#     
+#       nnn <- median(sample_sums(ps[[one_sample_type]]) ) 
+#       print(glue("Phyloseq - {one_sample_type}"))
+#       print(nnn)
+#       cat("============================\n")
+#       
+#   }
+
+```
+
+# Filtration based on Taxonomy - for Protist-synd
+
+```{r pressure, echo=FALSE}
+ #  # Remove Metazoa
+ #  # Remove Fungi
+ #  # Remove Syndiniales and Sarcomonadae
+ # 
+ #  for (one_sample_type in sample_types) {
+ # 
+ #      ps[[one_sample_type]] <- ps[[one_sample_type]] %>% 
+ #        subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) %>%
+ #       subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+ #      
+ #      print(glue("Phyloseq - {one_sample_type}"))
+ #      print(ps[[one_sample_type]] )
+ #      cat("============================\n")
+ #      
+ #  }
+ # 
+ # 
+ # for (one_sample_type in Water_mass.TS1) {
+ # 
+ #      ps[[one_sample_type]] <- ps[[one_sample_type]] %>% 
+ #        subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) %>%
+ #       subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+ #      
+ #      print(glue("Phyloseq - {one_sample_type}"))
+ #      print(ps[[one_sample_type]] )
+ #      cat("============================\n")
+ #      
+ # }
+ # 
+ # for (one_sample_type in area) {
+ # 
+ #      ps[[one_sample_type]] <- ps[[one_sample_type]] %>% 
+ #        subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) %>%
+ #        subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+ # 
+ #      
+ #      print(glue("Phyloseq - {one_sample_type}"))
+ #      print(ps[[one_sample_type]] )
+ #      cat("============================\n")
+ #      
+ # }
+ # 
+ # # Median number of reads in samples across different AREA
+ #  for (one_sample_type in area) {
+ #    
+ #    
+ #      nnn <- median(sample_sums(ps[[one_sample_type]]) ) 
+ #      print(glue("Phyloseq - {one_sample_type}"))
+ #      print(nnn)
+ #      cat("============================\n")
+ #      
+ #  }
+
+```
+
+# Filtration based on Taxonomy - for PHYTOPLANKTON
+
+```{r pressure, echo=FALSE}
+#   # Remove Metazoa
+#   # Remove Fungi
+#   # Keep only photosynthetic
+# #Could be done earlier for seawater ps as well before splitting this into multiple ps
+# 
+#   for (one_sample_type in sample_types) {
+# 
+#       ps[[one_sample_type]] <- ps[[one_sample_type]] %>% 
+#         subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) %>%
+#         subset_taxa(Division %in% c("Chlorophyta", "Dinoflagellata", "Cryptophyta", "Haptophyta", "Ochrophyta", "Cercozoa")) %>%
+#         subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+#         
+#       print(glue("Phyloseq - {one_sample_type}"))
+#       print(ps[[one_sample_type]] )
+#       cat("============================\n")
+#       
+#   }
+# 
+#  for (one_sample_type in Water_mass.TS1) {
+# 
+#        ps[[one_sample_type]] <- ps[[one_sample_type]] %>% 
+#         subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) %>%
+#         subset_taxa(Division %in% c("Chlorophyta", "Dinoflagellata", "Cryptophyta", "Haptophyta", "Ochrophyta", "Cercozoa")) %>%
+#         subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+#       
+#       print(glue("Phyloseq - {one_sample_type}"))
+#       print(ps[[one_sample_type]] )
+#       cat("============================\n")
+#       
+#  }
+# 
+#  for (one_sample_type in area) {
+# 
+#        ps[[one_sample_type]] <- ps[[one_sample_type]] %>% 
+#         subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) %>%
+#         subset_taxa(Division %in% c("Chlorophyta", "Dinoflagellata", "Cryptophyta", "Haptophyta", "Ochrophyta", "Cercozoa")) %>%
+#         subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+#       
+#       print(glue("Phyloseq - {one_sample_type}"))
+#       print(ps[[one_sample_type]] )
+#       cat("============================\n")
+#       
+#  }
+# 
+#  # Median number of reads in samples across different AREAS
+#   for (one_sample_type in area) {
+#     
+#     
+#       yyy <- median(sample_sums(ps[[one_sample_type]]))  
+#       print(glue("Phyloseq - {one_sample_type}"))
+#       print(yyy)
+#       cat("============================\n")
+#       
+#   }
+
+```
+
+# GET TAXA UNIQUE OF DIFFERENT GROUPS
+```{r pressure, echo=FALSE}
+get_taxa_unique(ps[["EEZ"]], "Division")
+
+Phyto <- ps[["EEZ"]] %>%
+        subset_taxa(!(Division %in% c("Metazoa", "Fungi"))) %>%
+        subset_taxa(Division %in% c("Chlorophyta", "Dinoflagellata", "Cryptophyta", "Haptophyta", "Ochrophyta")) %>%
+        subset_taxa(!(Class %in% c("Syndiniales", "Sarcomonadea")))
+
+# for example classes within Ochrophyta
+Ochrophyta <- Phyto %>%
+      subset_taxa(Division %in% c( "Ochrophyta")) 
+  
+  get_taxa_unique(Ochrophyta, "Class")
+
+```
+
+
+# Normalize and transform to long form
+# Define function - phyloseq_transform_to_long
+```{r pressure, echo=FALSE}
+  phyloseq_transform_to_long <- function(ps) {
+    otu_df <- as.data.frame(ps@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+  # See https://github.com/joey711/phyloseq/issues/983
+    taxo_df <- as.data.frame(ps@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+    otu_df <- left_join(taxo_df, otu_df)
+
+    metadata_df <- data.frame(sample_data(ps)) %>%
+      rownames_to_column(var = "file_code")
+
+    otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+    
+    #otu_df <-merge(otu_df, classes_division, by=c("Division"))
+
+
+    return(otu_df)
+
+  }
+
+```
+# Normalize 
+# Define function - phyloseq_normalize_median
+```{r pressure, echo=FALSE}
+ phyloseq_normalize_median <- function (ps) {
+  ps_median = median(sample_sums(ps))
+  normalize_median = function(x, t=ps_median) (if(sum(x) > 0){ round(t * (x / sum(x)))} else {x})
+  ps = transform_sample_counts(ps, normalize_median)
+  cat(str_c("\n========== \n") )
+  print(ps)
+  cat(sprintf("\n==========\nThe median number of reads used for normalization is  %.0f", ps_median))
+  return(ps)
+}
+
+```
+
+# Do normalizations and transformation - WATER MASS
+
+```{r pressure, echo=FALSE}
+  long_water_mass.TS1 <- list()
+
+  for (one_sample_type in Water_mass.TS1) {
+    
+      cat(one_sample_type)
+      cat("\n============================")  
+      
+      ps[[one_sample_type]] <- phyloseq_normalize_median(ps[[one_sample_type]])
+      
+      long_water_mass.TS1[[one_sample_type]] <- phyloseq_transform_to_long(ps[[one_sample_type]])
+      
+      cat("\n") 
+      
+  }
+```
+
+# Do normalizations and transformation - AREA
+
+```{r pressure, echo=FALSE}
+  long_area <- list()
+
+  for (one_sample_type in area) {
+    
+      cat(one_sample_type)
+      cat("\n============================")  
+      
+      ps[[one_sample_type]] <- phyloseq_normalize_median(ps[[one_sample_type]])
+      
+      long_area[[one_sample_type]] <- phyloseq_transform_to_long(ps[[one_sample_type]])
+      
+      cat("\n") 
+      
+  }
+```
+
+
+# Do TREEMAPS
+# Define function
+
+```{r pressure, echo=FALSE}
+  phyloseq_long_treemap <- function(df, group1, group2, title) {
+
+     df <- df %>%
+       group_by({{group1}}, {{group2}}) %>%
+       summarise(n_reads=sum(n_reads, na.rm = TRUE))
+     g_treemap <- ggplot(df, aes(area = n_reads,
+                                 fill = {{group2}},
+                                 label = {{group2}},
+                                 subgroup = {{group1}})) +
+        ggtitle(title) +
+        treemapify::geom_treemap() +
+        treemapify::geom_treemap_subgroup_border() +
+        treemapify::geom_treemap_text(colour = "black", place = "topleft", reflow = T,
+                                      padding.x =  grid::unit(1, "mm"),
+                                      padding.y = grid::unit(1, "mm") ) +
+        treemapify::geom_treemap_subgroup_text(place = "centre", grow = T, alpha = 0.25, colour =
+                             "white", fontface = "italic", min.size = 0) +
+        scale_fill_viridis_d() +
+        theme(legend.position="none", plot.title = element_text(size = 12, face = "bold"))
+     print(g_treemap)
+     return(list(df, g_treemap)) #for using with cowplot the plots need to save as objects. Instead of return(df), we have to return the df and                                   the plots = g_treemap 
+ }
+```
+
+
+# Define color scales for class - NOT WORKING - STICK TO SCALE VIRIDIS COLORS
+
+```{r pressure, echo=FALSE}
+# # Read the 18S class color files
+#   #classes_cce<- read.table("color_andres.txt", header=TRUE, sep="\t", na.strings="NA", dec=".", strip.white=TRUE)
+# classes_division <- read.table("Color_division.csv", sep=",", header=T, check.names = F, comment.char = "")
+# classes_division$color_hex <-col2hex(classes_division$color_division)
+# class_color_division <- structure(as.character(classes_division$color_hex),.Names=as.character(classes_division$division))
+# 
+# taxa_names(ps[["Seawater"]]) 
+# rank_names(ps[["Seawater"]])
+# get_taxa_unique(ps[["EEZ"]], "Division")
+# 
+# z <- get_taxa_unique(ps[["EEZ"]], "Division") 
+# write.csv(z, file='Tables/Division.csv')
+
+```
+
+# Creating lists for some specific cases - WATER MASSES - EUPHOTIC
+
+
+```{r pressure, echo=FALSE}
+ water_mass_euphotic= c("EEZ_euphotic","STW_euphotic", "STF_euphotic", "SAW_euphotic")
+
+ps[["EEZ_euphotic"]] <-  ps[["EEZ"]] %>%  subset_samples(light_layer== "Euphotic")
+
+ps[["STW_euphotic"]] <-  ps[["STW"]] %>%  subset_samples(light_layer== "Euphotic") 
+
+ps[["STF_euphotic"]] <-  ps[["STF"]] %>%  subset_samples(light_layer== "Euphotic") 
+
+ps[["SAW_euphotic"]] <-  ps[["SAW"]] %>%  subset_samples(light_layer== "Euphotic") 
+
+
+for (one_sample_type in water_mass_euphotic) {
+
+      
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(ps[[one_sample_type]] )
+      cat("============================\n")
+      
+}
+
+```
+
+# Creating lists for some specific cases - WATER MASSES - MIXED LAYER and SUB-SURFACE
+
+
+```{r pressure, echo=FALSE}
+ water_mass_layer= c("EEZ-surface","EEZ-sub-surface","STW_surface","STW_sub-surface", "STF_surface", "STF_sub-surface", "SAW_surface", "SAW_sub-surface")
+
+ps[["EEZ-surface"]] <-  ps[["EEZ"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="surface")
+
+ps[["EEZ-sub-surface"]] <-  ps[["EEZ"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="sub-surface")
+
+ps[["STW_surface"]] <-  ps[["STW"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="surface") 
+
+ps[["STW_sub-surface"]] <-  ps[["STW"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="sub-surface") 
+
+ps[["STF_surface"]] <-  ps[["STF"]] %>%  subset_samples(light_layer== "Euphotic"& dens_layer=="surface") 
+
+ps[["STF_sub-surface"]] <-  ps[["STF"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="sub-surface")
+
+ps[["SAW_surface"]] <-  ps[["SAW"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="surface") 
+
+ps[["SAW_sub-surface"]] <-  ps[["SAW"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="sub-surface")
+
+
+for (one_sample_type in water_mass_layer) {
+
+      
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(ps[[one_sample_type]] )
+      cat("============================\n")
+      
+}
+
+```
+# Creating lists for some specific cases - AREAS -surface mIXED LAYER and SUB-SURFACE
+
+
+```{r pressure, echo=FALSE}
+ areas_surface= c("Cross-shelf_surface", "Bio-STM_surface","STW SpringBloom_surface", "ChathamRise_surface", "Bio-SAM_surface","Bio-STF_surface","Campbell Plateau_surface" ,"SAF_surface", "Cross-shelf_sub-surface", "STW SpringBloom_sub-surface", "Bio-STM_sub-surface",  "Bio-SAM_sub-surface","Bio-STF_Aphotic","Campbell Plateau_sub-surface" ,"SAF_sub-surface")
+
+ps[["Cross-shelf_surface"]] <-  ps[["Cross-shelf"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="surface") 
+ps[["Cross-shelf_sub-surface"]] <-  ps[["Cross-shelf"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="sub-surface") 
+
+# ps[["Bay of Plenty_surface"]] <-  ps[["Bay of Plenty"]] %>%  subset_samples(dens_layer=="surface") 
+# ps[["Bay of Plenty_sub-surface"]] <-  ps[["Bay of Plenty"]] %>%  subset_samples(dens_layer=="sub-surface") 
+
+ps[["STW SpringBloom_surface"]] <-  ps[["STW SpringBloom"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="surface") 
+ps[["STW SpringBloom_sub-surface"]] <-  ps[["STW SpringBloom"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="sub-surface") 
+
+ps[["Bio-STM_surface"]] <-  ps[["Bio-STM"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="surface") 
+ps[["Bio-STM_sub-surface"]] <-  ps[["Bio-STM"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="sub-surface") 
+
+ps[["Bio-STF_surface"]] <-  ps[["Bio-STF"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="surface") 
+ ps[["Bio-STF_Aphotic"]] <-  ps[["Bio-STF"]] %>%  subset_samples(dens_layer=="sub-surface") 
+### there is no subsurface - euphotic samples collected in in STF (10 m, 150 m, 300 m)
+
+ps[["ChathamRise_surface"]] <-  ps[["ChathamRise"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="surface")  
+# ps[["ChathamRise_sub-surface"]] <-  ps[["ChathamRise"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="sub-surface") 
+
+ps[["Bio-SAM_surface"]] <-  ps[["Bio-SAM"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="surface")
+ps[["Bio-SAM_sub-surface"]] <-  ps[["Bio-SAM"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="sub-surface")
+
+ps[["Campbell Plateau_surface"]] <-  ps[["Campbell Plateau"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="surface") 
+ps[["Campbell Plateau_sub-surface"]] <-  ps[["Campbell Plateau"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="sub-surface") 
+
+ps[["SAF_surface"]] <-  ps[["SAF"]] %>%  subset_samples(light_layer== "Euphotic" & dens_layer=="surface")  
+ps[["SAF_sub-surface"]] <-  ps[["SAF"]] %>%  subset_samples(dens_layer=="sub-surface")  
+
+#ps[["RossSea_SO_photic"]] <-  ps[["RossSea_SO"]] %>%  subset_samples(light_layer== "Euphotic")
+
+for (one_sample_type in areas_surface) {
+
+      
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(ps[[one_sample_type]] )
+      cat("============================\n")
+      
+}
+
+```
+
+# Creating lists for some specific cases - AREAS -surface MIXED LAYER and SUB-SURFACE
+
+
+```{r pressure, echo=FALSE}
+ areas_euphotic= c("Cross-shelf_euphotic", "STW SpringBloom_euphotic", "Bio-STM_euphotic", "ChathamRise_euphotic", "Bio-SAM_euphotic","Bio-STF_euphotic","Campbell Plateau_euphotic" ,"SAF_euphotic")
+
+ps[["Cross-shelf_euphotic"]] <-  ps[["Cross-shelf"]] %>%  subset_samples(light_layer== "Euphotic") 
+
+# ps[["Bay of Plenty_euphotic"]] <-  ps[["Bay of Plenty"]] %>%  subset_samples(dens_layer== "surface") 
+
+ps[["STW SpringBloom_euphotic"]] <-  ps[["STW SpringBloom"]] %>%  subset_samples(light_layer== "Euphotic" ) 
+
+ps[["Bio-STM_euphotic"]] <-  ps[["Bio-STM"]] %>%  subset_samples(light_layer== "Euphotic" ) 
+
+ps[["Bio-STF_euphotic"]] <-  ps[["Bio-STF"]] %>%  subset_samples(light_layer== "Euphotic" ) 
+
+ps[["ChathamRise_euphotic"]] <-  ps[["ChathamRise"]] %>%  subset_samples(light_layer== "Euphotic")  
+
+ps[["Bio-SAM_euphotic"]] <-  ps[["Bio-SAM"]] %>%  subset_samples(light_layer== "Euphotic" )
+
+ps[["Campbell Plateau_euphotic"]] <-  ps[["Campbell Plateau"]] %>%  subset_samples(light_layer== "Euphotic") 
+
+ps[["SAF_euphotic"]] <-  ps[["SAF"]] %>%  subset_samples(light_layer== "Euphotic")  
+
+#ps[["RossSea_SO_photic"]] <-  ps[["RossSea_SO"]] %>%  subset_samples(light_layer== "Euphotic")
+
+for (one_sample_type in areas_euphotic) {
+
+      
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(ps[[one_sample_type]] )
+      cat("============================\n")
+      
+}
+
+```
+
+# Creating lists for some specific cases - BIOPHYSICAL MOORING - EUPHOTIC VS APHOTIC
+
+
+```{r pressure, echo=FALSE}
+ BPM = c("BPM_euphotic","BPM_aphotic","Bio-STM_euphotic","Bio-SAM_euphotic", "Bio-STF_euphotic", "Bio-STM_aphotic","Bio-SAM_aphotic", "Bio-STF_aphotic")
+
+ps[["BPM_euphotic"]] <-  ps[["EEZ"]] %>%  subset_samples(light_layer== "Euphotic" & Project=="BiophysMoorings")  
+
+ps[["Bio-STM_euphotic"]] <-  ps[["Bio-STM"]] %>%  subset_samples(light_layer== "Euphotic" ) 
+
+ps[["Bio-STF_euphotic"]] <-  ps[["Bio-STF"]] %>%  subset_samples(light_layer== "Euphotic" ) 
+
+ps[["Bio-SAM_euphotic"]] <-  ps[["Bio-SAM"]] %>%  subset_samples(light_layer== "Euphotic" )
+
+ps[["BPM_aphotic"]] <-  ps[["EEZ"]] %>%  subset_samples(light_layer== "Aphotic" & Project=="BiophysMoorings")
+
+ps[["Bio-STM_aphotic"]] <-  ps[["Bio-STM"]] %>%  subset_samples(light_layer== "Aphotic" ) 
+
+ps[["Bio-STF_aphotic"]] <-  ps[["Bio-STF"]] %>%  subset_samples(light_layer== "Aphotic" ) 
+
+ps[["Bio-SAM_aphotic"]] <-  ps[["Bio-SAM"]] %>%  subset_samples(light_layer== "Aphotic" )
+
+for (one_sample_type in BPM) {
+
+      
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(ps[[one_sample_type]] )
+      cat("============================\n")
+      
+}
+
+```
+
+# Creating lists for some specific TAXONOMIC GROUPS - WATER MASSES - EUPHOTIC 
+
+```{r pressure, echo=FALSE}
+get_taxa_unique(ps[["Seawater"]], "Division")
+
+water_mass_group= c("STW_chloro", "STF_chloro", "SAW_chloro", "STW_ochro", "STF_ochro", "SAW_ochro","STW_hapto", "STF_hapto", "SAW_hapto", "STW_crypto", "STF_crypto", "SAW_crypto","STW_dino", "STF_dino", "SAW_dino", "STW_rads", "STF_rads", "SAW_rads", "STW_Stram_X", "STF_Stram_X", "SAW_Stram_X", "STW_Cilio", "STF_Cilio", "SAW_Cilio" )
+
+ps[["STW_chloro"]] <-  ps[["STW"]] %>%  subset_samples(light_layer== "Euphotic")  %>% 
+                   subset_taxa((Division %in% c("Chlorophyta"))) 
+
+ps[["STF_chloro"]] <-  ps[["STF"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Chlorophyta"))) 
+
+ps[["SAW_chloro"]] <-  ps[["SAW"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Chlorophyta"))) 
+
+ps[["STW_ochro"]] <-  ps[["STW"]] %>%  subset_samples(light_layer== "Euphotic")  %>% 
+                   subset_taxa((Division %in% c("Ochrophyta"))) 
+
+ps[["STF_ochro"]] <-  ps[["STF"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Ochrophyta"))) 
+
+ps[["SAW_ochro"]] <-  ps[["SAW"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Ochrophyta"))) 
+
+ps[["STW_hapto"]] <-  ps[["STW"]] %>%  subset_samples(light_layer== "Euphotic")  %>% 
+                   subset_taxa((Division %in% c("Haptophyta"))) 
+
+ps[["STF_hapto"]] <-  ps[["STF"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Haptophyta"))) 
+
+ps[["SAW_hapto"]] <-  ps[["SAW"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Haptophyta"))) 
+
+ps[["STW_crypto"]] <-  ps[["STW"]] %>%  subset_samples(light_layer== "Euphotic")  %>% 
+                   subset_taxa((Division %in% c("Cryptophyta"))) 
+
+ps[["STF_crypto"]] <-  ps[["STF"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Cryptophyta"))) 
+
+ps[["SAW_crypto"]] <-  ps[["SAW"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Cryptophyta"))) 
+
+ps[["STW_dino"]] <-  ps[["STW"]] %>%  subset_samples(light_layer== "Euphotic")  %>% 
+                   subset_taxa((Division %in% c("Dinoflagellata"))) 
+
+ps[["STF_dino"]] <-  ps[["STF"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Dinoflagellata"))) 
+
+ps[["SAW_dino"]] <-  ps[["SAW"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Dinoflagellata"))) 
+
+ps[["STW_rads"]] <-  ps[["STW"]] %>%  subset_samples(light_layer== "Euphotic")  %>% 
+                   subset_taxa((Division %in% c("Radiolaria"))) 
+
+ps[["STF_rads"]] <-  ps[["STF"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Radiolaria"))) 
+
+ps[["SAW_rads"]] <-  ps[["SAW"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Radiolaria"))) 
+
+ps[["STW_Stram_X"]] <-  ps[["STW"]] %>%  subset_samples(light_layer== "Euphotic")  %>% 
+                   subset_taxa((Division %in% c("Stramenopiles_X"))) 
+
+ps[["STF_Stram_X"]] <-  ps[["STF"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Stramenopiles_X"))) 
+
+ps[["SAW_Stram_X"]] <-  ps[["SAW"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Stramenopiles_X")))
+
+ps[["STW_Cilio"]] <-  ps[["STW"]] %>%  subset_samples(light_layer== "Euphotic")  %>% 
+                   subset_taxa((Division %in% c("Ciliophora"))) 
+
+ps[["STF_Cilio"]] <-  ps[["STF"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Ciliophora"))) 
+
+ps[["SAW_Cilio"]] <-  ps[["SAW"]] %>%  subset_samples(light_layer== "Euphotic") %>% 
+                   subset_taxa((Division %in% c("Ciliophora"))) 
+
+
+
+
+
+for (one_sample_type in water_mass_group) {
+
+      
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(ps[[one_sample_type]] )
+      cat("============================\n")
+      
+}
+
+```
+# Plot Treemap - WATER MASSES - EUPHOTIC
+
+
+```{r pressure, echo=FALSE}
+long_grouped_class <- list()
+long_grouped_genus <- list()
+
+for (one_sample_type in water_mass_euphotic) {
+    
+      long_water_mass.TS1[[one_sample_type]] <- phyloseq_transform_to_long(ps[[one_sample_type]])
+  }
+
+  
+for (one_sample_type in water_mass_euphotic) {
+    
+      long_grouped_class[[one_sample_type]] <- phyloseq_long_treemap(long_water_mass.TS1[[one_sample_type]], 
+                                                                     Division, Class, 
+                                                                     str_c(one_sample_type, " - Class" ))
+      
+       long_grouped_genus[[one_sample_type]] <- phyloseq_long_treemap(long_water_mass.TS1[[one_sample_type]],
+                                                                    Class, Genus, 
+                                                                     str_c(one_sample_type, " - Genus" ))
+ 
+  }
+
+
+
+```
+
+
+# Class x genus WATER MASSES - EUPHOTIC
+```{r pressure, echo=FALSE}
+CairoPDF(file = "R.Figures/Treemaps/Treemap_watermass_EUPHOTIC_PROTIST_CLASS_GENUS", width = 10, height = 16) 
+plot_grid(long_grouped_class[["EEZ_euphotic"]][[2]], long_grouped_genus[["EEZ_euphotic"]][[2]],long_grouped_class[["STW_euphotic"]][[2]], long_grouped_genus[["STW_euphotic"]][[2]], long_grouped_class[["STF_euphotic"]][[2]], long_grouped_genus[["STF_euphotic"]][[2]], long_grouped_class[["SAW_euphotic"]][[2]], long_grouped_genus[["SAW_euphotic"]][[2]], nrow = 4, ncol = 2, rel_heights= c(1,1) )
+dev.off()
+
+
+```
+
+# Plot Treemap - WATER MASSES - MIXED-LAYER and SUB-SURFACE
+
+
+```{r pressure, echo=FALSE}
+long_grouped_class <- list()
+long_grouped_genus <- list()
+
+for (one_sample_type in water_mass_layer) {
+    
+      long_water_mass.TS1[[one_sample_type]] <- phyloseq_transform_to_long(ps[[one_sample_type]])
+  }
+
+  
+for (one_sample_type in water_mass_layer) {
+    
+      long_grouped_class[[one_sample_type]] <- phyloseq_long_treemap(long_water_mass.TS1[[one_sample_type]], 
+                                                                     Division, Class, 
+                                                                     str_c(one_sample_type, " - Class" ))
+      
+       long_grouped_genus[[one_sample_type]] <- phyloseq_long_treemap(long_water_mass.TS1[[one_sample_type]],
+                                                                      Class, Genus, 
+                                                                     str_c(one_sample_type, " - Genus" ))
+ 
+  }
+
+
+
+```
+
+# Class x genus WATER MASSES - MIXED LAYER and SUB-SURFACE
+```{r pressure, echo=FALSE}
+CairoPDF(file = "R.Figures/Treemaps/July/Treemap_watermass_surface_vs_subsurface_PROTIST_GENUS", width = 10, height = 16) 
+plot_grid(long_grouped_genus[["EEZ-surface"]][[2]], long_grouped_genus[["EEZ-sub-surface"]][[2]],long_grouped_genus[["STW_surface"]][[2]], long_grouped_genus[["STW_sub-surface"]][[2]], long_grouped_genus[["STF_surface"]][[2]], long_grouped_genus[["STF_sub-surface"]][[2]], long_grouped_genus[["SAW_surface"]][[2]], long_grouped_genus[["SAW_sub-surface"]][[2]], nrow = 4, ncol = 2, rel_heights= c(1,1) )
+dev.off()
+
+CairoPDF(file = "R.Figures/Treemaps/July/Treemap_watermass_surface_vs_subsurface_PROTIST_CLASS", width = 10, height = 16) 
+plot_grid(long_grouped_class[["EEZ-surface"]][[2]], long_grouped_class[["EEZ-sub-surface"]][[2]],long_grouped_class[["STW_surface"]][[2]], long_grouped_class[["STW_sub-surface"]][[2]], long_grouped_class[["STF_surface"]][[2]], long_grouped_class[["STF_sub-surface"]][[2]], long_grouped_class[["SAW_surface"]][[2]], long_grouped_class[["SAW_sub-surface"]][[2]], nrow = 4, ncol = 2, rel_heights= c(1,1) )
+dev.off()
+
+```
+
+# Plot Treemap - AREAS - EUPHOTIC
+
+
+```{r pressure, echo=FALSE}
+long_grouped_class_area <- list()
+long_grouped_genus_area <- list()
+
+for (one_sample_type in areas_euphotic) {
+    
+      long_area[[one_sample_type]] <- phyloseq_transform_to_long(ps[[one_sample_type]])
+  }
+
+  
+for (one_sample_type in areas_euphotic) {
+    
+      long_grouped_class_area[[one_sample_type]] <- phyloseq_long_treemap(long_area[[one_sample_type]], 
+                                                                     Division, Class, 
+                                                                     str_c(one_sample_type, " - Class" ))
+      
+       long_grouped_genus_area[[one_sample_type]] <- phyloseq_long_treemap(long_area[[one_sample_type]], 
+                                                                      Class, Genus, 
+                                                                      str_c(one_sample_type, " - Genus" ))
+ 
+  }
+
+
+
+```
+
+# Plot Treemap - AREAS - MIXED LAYER and SUB-SURFACE
+
+
+```{r pressure, echo=FALSE}
+long_grouped_class_area <- list()
+long_grouped_genus_area <- list()
+
+for (one_sample_type in areas_surface) {
+    
+      long_area[[one_sample_type]] <- phyloseq_transform_to_long(ps[[one_sample_type]])
+  }
+
+  
+for (one_sample_type in areas_surface) {
+    
+      long_grouped_class_area[[one_sample_type]] <- phyloseq_long_treemap(long_area[[one_sample_type]], 
+                                                                     Division, Class, 
+                                                                     str_c(one_sample_type, " - Class" ))
+      
+       long_grouped_genus_area[[one_sample_type]] <- phyloseq_long_treemap(long_area[[one_sample_type]], 
+                                                                      Class, Genus, 
+                                                                      str_c(one_sample_type, " - Genus" ))
+ 
+  }
+
+
+
+```
+## Using cowplot for griding the treemap (the website is better than the helper https://wilkelab.org/cowplot/articles/plot_grid.html)
+
+
+
+# Class x genus AREAS-EUPHOTIC  - Surface MIXED LAYER and SUB-SURFACE
+```{r pressure, echo=FALSE}
+
+### Genus
+CairoPDF(file = "R.Figures/Treemaps/July/Treemap_AREAS_surface-subsurface_PROTIST_GENUS", width = 10, height = 32) 
+plot_grid(long_grouped_genus_area[["Cross-shelf_surface"]][[2]], long_grouped_genus_area[["Cross-shelf_sub-surface"]][[2]],  long_grouped_genus_area[["STW SpringBloom_surface"]][[2]], long_grouped_genus_area[["STW SpringBloom_sub-surface"]][[2]], long_grouped_genus_area[["Bio-STM_surface"]][[2]],long_grouped_genus_area[["Bio-STM_sub-surface"]][[2]],
+long_grouped_genus_area[["ChathamRise_surface"]][[2]],long_grouped_genus_area[["ChathamRise_sub-surface"]][[2]],long_grouped_genus_area[["Bio-STF_surface"]][[2]],long_grouped_genus_area[["Bio-STF_sub-surface"]][[2]],
+long_grouped_genus_area[["Bio-SAM_surface"]][[2]],long_grouped_genus_area[["Bio-SAM_sub-surface"]][[2]],
+long_grouped_genus_area[["Campbell Plateau_surface"]][[2]], long_grouped_genus_area[["Campbell Plateau_sub-surface"]][[2]],
+long_grouped_genus_area[["SAF_surface"]][[2]],long_grouped_genus_area[["SAF_sub-surface"]][[2]], nrow = 8, ncol = 2, rel_heights= c(1,1) )
+dev.off()
+
+### CLass
+CairoPDF(file = "R.Figures/Treemaps/July/Treemap_AREAS_surface-subsurface_PROTIST_CLASS", width = 10, height = 32) 
+plot_grid(long_grouped_class_area[["Cross-shelf_surface"]][[2]], long_grouped_class_area[["Cross-shelf_sub-surface"]][[2]],  long_grouped_class_area[["STW SpringBloom_surface"]][[2]], long_grouped_class_area[["STW SpringBloom_sub-surface"]][[2]], long_grouped_class_area[["Bio-STM_surface"]][[2]],long_grouped_class_area[["Bio-STM_sub-surface"]][[2]],
+long_grouped_class_area[["ChathamRise_surface"]][[2]],long_grouped_class_area[["ChathamRise_sub-surface"]][[2]],long_grouped_class_area[["Bio-STF_surface"]][[2]],long_grouped_class_area[["Bio-STF_sub-surface"]][[2]],
+long_grouped_class_area[["Bio-SAM_surface"]][[2]],long_grouped_class_area[["Bio-SAM_sub-surface"]][[2]],
+long_grouped_class_area[["Campbell Plateau_surface"]][[2]], long_grouped_class_area[["Campbell Plateau_sub-surface"]][[2]],
+long_grouped_class_area[["SAF_surface"]][[2]],long_grouped_class_area[["SAF_sub-surface"]][[2]], nrow = 8, ncol = 2, rel_heights= c(1,1) )
+dev.off()
+
+```
+
+# Class x genus AREAS-EUPHOTIC
+```{r pressure, echo=FALSE}
+
+### Genus
+CairoPDF(file = "R.Figures/Treemaps/July/Treemap_AREAS_EUPHOTIC_PROTIST_CLASS_GENUS", width = 10, height = 32) 
+plot_grid(long_grouped_class_area[["Cross-shelf_euphotic"]][[2]], long_grouped_genus_area[["Cross-shelf_euphotic"]][[2]],  long_grouped_class_area[["STW SpringBloom_euphotic"]][[2]], long_grouped_genus_area[["STW SpringBloom_euphotic"]][[2]], long_grouped_class_area[["Bio-STM_euphotic"]][[2]],long_grouped_genus_area[["Bio-STM_euphotic"]][[2]],
+long_grouped_class_area[["ChathamRise_euphotic"]][[2]],long_grouped_genus_area[["ChathamRise_euphotic"]][[2]],long_grouped_class_area[["Bio-STF_euphotic"]][[2]],long_grouped_genus_area[["Bio-STF_euphotic"]][[2]],
+long_grouped_class_area[["Bio-SAM_euphotic"]][[2]],long_grouped_genus_area[["Bio-SAM_euphotic"]][[2]],
+long_grouped_class_area[["Campbell Plateau_euphotic"]][[2]], long_grouped_genus_area[["Campbell Plateau_euphotic"]][[2]],
+long_grouped_class_area[["SAF_euphotic"]][[2]],long_grouped_genus_area[["SAF_euphotic"]][[2]], nrow = 8, ncol = 2, rel_heights= c(1,1) )
+dev.off()
+
+```
+
+# Plot Treemap - BIOPHYSICAL MOORINGS -  Euphotic vs aphotic
+
+
+```{r pressure, echo=FALSE}
+long_grouped_class <- list()
+long_grouped_genus <- list()
+
+for (one_sample_type in BPM) {
+    
+      long_water_mass.TS1[[one_sample_type]] <- phyloseq_transform_to_long(ps[[one_sample_type]])
+  }
+
+  
+for (one_sample_type in BPM) {
+    
+      long_grouped_class[[one_sample_type]] <- phyloseq_long_treemap(long_water_mass.TS1[[one_sample_type]], 
+                                                                     Division, Class, 
+                                                                     str_c(one_sample_type, " - Class" ))
+      
+       long_grouped_genus[[one_sample_type]] <- phyloseq_long_treemap(long_water_mass.TS1[[one_sample_type]],
+                                                                      Class, Genus, 
+                                                                     str_c(one_sample_type, " - Genus" ))
+ 
+  }
+
+
+
+```
+
+# Class x genus BIOPHYSICAL MOORINGS -  Euphotic vs aphotic
+```{r pressure, echo=FALSE}
+CairoPDF(file = "R.Figures/Treemaps/Treemap_watermass_BPM_photic_vs_aphotic_PROTIST_GENUS", width = 10, height = 16) 
+plot_grid(long_grouped_genus[["BPM_euphotic"]][[2]],long_grouped_genus[["BPM_aphotic"]][[2]],long_grouped_genus[["Bio-STM_euphotic"]][[2]],long_grouped_genus[["Bio-STM_aphotic"]][[2]], long_grouped_genus[["Bio-STF_euphotic"]][[2]], long_grouped_genus[["Bio-STF_aphotic"]][[2]], long_grouped_genus[["Bio-SAM_euphotic"]][[2]], long_grouped_genus[["Bio-SAM_aphotic"]][[2]], nrow = 4, ncol = 2, rel_heights= c(1,1) )
+dev.off()
+
+CairoPDF(file = "R.Figures/Treemaps/Treemap_watermass_BPM_photic_vs_aphotic_PROTIST_CLASS", width = 10, height = 16) 
+plot_grid(long_grouped_class[["BPM_euphotic"]][[2]],long_grouped_class[["BPM_aphotic"]][[2]],long_grouped_class[["Bio-STM_euphotic"]][[2]],long_grouped_class[["Bio-STM_aphotic"]][[2]], long_grouped_class[["Bio-STF_euphotic"]][[2]], long_grouped_class[["Bio-STF_aphotic"]][[2]], long_grouped_class[["Bio-SAM_euphotic"]][[2]], long_grouped_class[["Bio-SAM_aphotic"]][[2]], nrow = 4, ncol = 2, rel_heights= c(1,1) )
+dev.off()
+
+```
+
+# Plot Treemap - WATER MASSES - EUPHOTIC - ZOOMING TAXONOMIC CLASSES 
+
+
+```{r pressure, echo=FALSE}
+# long_grouped_class <- list()
+long_grouped_genus <- list()
+
+for (one_sample_type in water_mass_group) {
+    
+      long_water_mass.TS1[[one_sample_type]] <- phyloseq_transform_to_long(ps[[one_sample_type]])
+  }
+
+  
+for (one_sample_type in water_mass_group) {
+    
+
+      
+       long_grouped_genus[[one_sample_type]] <- phyloseq_long_treemap(long_water_mass.TS1[[one_sample_type]],
+                                                                    Class, Genus, 
+                                                                     str_c(one_sample_type, " - Genus" ))
+ 
+  }
+
+
+```
+
+# Genus TAXONOmIC GROUPS - EUPHOTIC - WATER MASSES
+```{r pressure, echo=FALSE}
+
+### Genus
+
+CairoPDF(file = "R.Figures/Treemaps/Groups_watermass_large_PROTIST_ALL_March2022", width = 20, height = 30) 
+plot_grid(long_grouped_genus[["STW_chloro"]][[2]], long_grouped_genus[["STF_chloro"]][[2]],long_grouped_genus[["SAW_chloro"]][[2]], long_grouped_genus[["STW_ochro"]][[2]], long_grouped_genus[["STF_ochro"]][[2]],long_grouped_genus[["SAW_ochro"]][[2]], long_grouped_genus[["STW_hapto"]][[2]], long_grouped_genus[["STF_hapto"]][[2]],long_grouped_genus[["SAW_hapto"]][[2]], long_grouped_genus[["STW_dino"]][[2]], long_grouped_genus[["STF_dino"]][[2]],long_grouped_genus[["SAW_dino"]][[2]], long_grouped_genus[["STW_crypto"]][[2]], long_grouped_genus[["STF_crypto"]][[2]],long_grouped_genus[["SAW_crypto"]][[2]], long_grouped_genus[["STW_rads"]][[2]], long_grouped_genus[["STF_rads"]][[2]],long_grouped_genus[["SAW_rads"]][[2]], long_grouped_genus[["STW_Stram_X"]][[2]], long_grouped_genus[["STF_Stram_X"]][[2]],long_grouped_genus[["SAW_Stram_X"]][[2]], long_grouped_genus[["STW_Cilio"]][[2]], long_grouped_genus[["STF_Cilio"]][[2]],long_grouped_genus[["SAW_Cilio"]][[2]], nrow = 8, ncol = 3, rel_heights=2 )
+dev.off()
+
+```
+
+## Calculate statistics of group specific relative abundances
+
+# Normalize the otu table 
+# Define function - phyloseq_normalize_median
+
+```{r pressure, echo=FALSE}
+
+ps_protist_class <- tax_glom(ps[["EEZ"]], taxrank = "Class")
+ps_protist_synd_class <- tax_glom(ps[["EEZ-synd"]], taxrank = "Class")
+ps_phyto_class <- tax_glom(ps[["EEZ-phyto"]], taxrank = "Class")
+
+ps_protist_division <- tax_glom(ps[["EEZ"]], taxrank = "Division")
+ps_protist_synd_division <- tax_glom(ps[["EEZ-synd"]], taxrank = "Division")
+ps_phyto_division <- tax_glom(ps[["EEZ-phyto"]], taxrank = "Division")
+
+## Standardize to relative abundances 
+
+#PROTIST
+ps_protist_class.rel = transform_sample_counts(ps_protist_class, function(OTU) OTU*100/sum(OTU) )
+ps_protist_division.rel = transform_sample_counts(ps_protist_division, function(OTU) OTU*100/sum(OTU) )
+
+#PROTIST-SYND
+ps_protist_synd_class.rel = transform_sample_counts(ps_protist_synd_class, function(OTU) OTU*100/sum(OTU) )
+ps_protist_synd_division.rel = transform_sample_counts(ps_protist_synd_division, function(OTU) OTU*100/sum(OTU) )
+
+#PHYTO
+ps_phyto_class.rel = transform_sample_counts(ps_phyto_class, function(OTU) OTU*100/sum(OTU) )
+ps_phyto_division.rel = transform_sample_counts(ps_phyto_division, function(OTU) OTU*100/sum(OTU) )
+
+```
+
+# Colors for plotting taxonomy
+
+```{r pressure, echo=FALSE}
+
+classes_division <- read.table("Color_division.csv", sep=",", header=T, check.names = F, comment.char = "")
+
+classes_division$color_hex_division <-col2hex(classes_division$color_division)
+class_color_division <- structure(as.character(classes_division$color_division),.Names=as.character(classes_division$division))
+
+classes_division$color_hex_class <-col2hex(classes_division$color_class)
+class_color_class <- structure(as.character(classes_division$color_hex_class),.Names=as.character(classes_division$class))
+```
+
+## Make LONG FORMAT dataframe for plotting
+
+### CLASS ###
+
+## PROTIST
+
+```{r pressure, echo=FALSE}
+
+## dataframe for plotting
+otu_df <- as.data.frame(ps_protist_class.rel@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+taxo_df <- as.data.frame(ps_protist_class.rel@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+otu_df <- left_join(taxo_df, otu_df)
+metadata_df <- data.frame(sample_data(ps_protist_class.rel)) %>%
+      rownames_to_column(var = "file_code")
+otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+df_protist_class.rel <-left_join(otu_df, classes_division, by=c("Class"= "class"))
+    
+    write.xlsx(df_protist_class.rel, file = "R.Figures/Treemaps/July/df_protist_class.rel.xlsx")
+
+```
+
+## PROTIST-SYND
+
+```{r pressure, echo=FALSE}
+
+## dataframe for plotting
+otu_df <- as.data.frame(ps_protist_synd_class.rel@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+taxo_df <- as.data.frame(ps_protist_synd_class.rel@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+otu_df <- left_join(taxo_df, otu_df)
+metadata_df <- data.frame(sample_data(ps_protist_synd_class.rel)) %>%
+      rownames_to_column(var = "file_code")
+otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+df_protist_synd_class.rel <-left_join(otu_df, classes_division, by=c("Class"= "class"))
+    
+    write.xlsx(df_protist_synd_class.rel, file = "R.Figures/Treemaps/July/df_protist_synd_class.rel.xlsx")
+
+```
+
+## PHYTO
+
+```{r pressure, echo=FALSE}
+
+## dataframe for plotting
+otu_df <- as.data.frame(ps_phyto_class.rel@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+taxo_df <- as.data.frame(ps_phyto_class.rel@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+otu_df <- left_join(taxo_df, otu_df)
+metadata_df <- data.frame(sample_data(ps_phyto_class.rel)) %>%
+      rownames_to_column(var = "file_code")
+otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+df_phyto_class.rel <-left_join(otu_df, classes_division, by=c("Class"= "class"))
+
+df_phyto_class.rel <- df_phyto_class.rel %>%
+      mutate(pico_pct = Chla_02*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(nano_pct = Chla_2*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(micro_pct = Chla_20*100/(Chla_02 + Chla_2 + Chla_20))
+    
+    write.xlsx(df_phyto_class.rel, file = "R.Figures/Treemaps/July/df_phyto_class.rel_July2020.xlsx")
+
+```
+
+
+## Summary mean and sd relative abundance of CLASSES in different water masses
+
+# CLASSES
+
+```{r, fig.height=6, fig.width=6}
+
+## PROTIST classes
+class_df_protist_stat <-  df_protist_class.rel %>%
+    filter(light_layer == "Euphotic") %>% ### surface values
+    group_by(Water_mass.TS1, Class) %>% 
+    add_tally() %>%
+    summarise(median = median(n_reads, na.rm = TRUE), mean=mean(n_reads, na.rm = TRUE), sd=sd(n_reads, na.rm = TRUE), n=mean(n, na.rm = TRUE))
+
+ class_df_protist_stat <- class_df_protist_stat %>%
+  arrange(Water_mass.TS1, -mean) 
+
+write.xlsx(class_df_protist_stat, file = "R.Figures/Treemaps/July/class_df_protist_stat.xlsx")
+
+## PROTIST-SYND classes
+class_df_protist_synd_stat <-  df_protist_synd_class.rel %>%
+    filter(light_layer == "Euphotic") %>% ### surface values
+    group_by(Water_mass.TS1, Class) %>% 
+    add_tally() %>%
+    summarise(median = median(n_reads, na.rm = TRUE), mean=mean(n_reads, na.rm = TRUE), sd=sd(n_reads, na.rm = TRUE), n=mean(n, na.rm = TRUE))
+
+ class_df_protist_synd_stat <- class_df_protist_synd_stat %>%
+  arrange(Water_mass.TS1, -mean) 
+
+write.xlsx(class_df_protist_synd_stat, file = "R.Figures/Treemaps/July/class_df_protist_synd_stat.xlsx")
+
+## Phyto classes
+class_df_phyto_stat <-  df_phyto_class.rel %>%
+    filter(light_layer == "Euphotic") %>% ### surface values
+    group_by(Water_mass.TS1, Class) %>% 
+    add_tally() %>%
+    summarise(median = median(n_reads, na.rm = TRUE), mean=mean(n_reads, na.rm = TRUE), sd=sd(n_reads, na.rm = TRUE), n=mean(n, na.rm = TRUE))
+
+ class_df_phyto_stat <- class_df_phyto_stat %>%
+  arrange(Water_mass.TS1, -mean) 
+
+write.xlsx(class_df_phyto_stat, file = "R.Figures/Treemaps/July/class_df_phyto_stat.xlsx")
+
+```
+
+### DIVISION ###
+
+## PROTIST
+
+```{r pressure, echo=FALSE}
+
+## dataframe for plotting
+otu_df <- as.data.frame(ps_protist_division.rel@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+taxo_df <- as.data.frame(ps_protist_division.rel@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+otu_df <- left_join(taxo_df, otu_df)
+metadata_df <- data.frame(sample_data(ps_protist_division.rel)) %>%
+      rownames_to_column(var = "file_code")
+otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+df_protist_division.rel <-left_join(otu_df, classes_division, by=c("Class"= "class"))
+    
+    write.xlsx(df_protist_division.rel, file = "R.Figures/Treemaps/July/df_protist_division.rel.xlsx")
+
+```
+
+## PROTIST-SYND
+
+```{r pressure, echo=FALSE}
+
+## dataframe for plotting
+otu_df <- as.data.frame(ps_protist_synd_division.rel@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+taxo_df <- as.data.frame(ps_protist_synd_division.rel@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+otu_df <- left_join(taxo_df, otu_df)
+metadata_df <- data.frame(sample_data(ps_protist_synd_division.rel)) %>%
+      rownames_to_column(var = "file_code")
+otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+df_protist_synd_division.rel <-left_join(otu_df, classes_division, by=c("Class"= "class"))
+    
+    write.xlsx(df_protist_synd_division.rel, file = "R.Figures/Treemaps/July/df_protist_synd_division.rel.xlsx")
+
+```
+
+## PHYTO
+
+```{r pressure, echo=FALSE}
+
+## dataframe for plotting
+otu_df <- as.data.frame(ps_phyto_division.rel@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber") %>%
+      pivot_longer(cols = -OTUNumber,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+
+taxo_df <- as.data.frame(ps_phyto_division.rel@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "OTUNumber")
+
+otu_df <- left_join(taxo_df, otu_df)
+metadata_df <- data.frame(sample_data(ps_phyto_division.rel)) %>%
+      rownames_to_column(var = "file_code")
+otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+df_phyto_division.rel <-left_join(otu_df, classes_division, by=c("Class"= "class"))
+
+df_phyto_division.rel <- df_phyto_division.rel %>%
+      mutate(pico_pct = Chla_02*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(nano_pct = Chla_2*100/(Chla_02 + Chla_2 + Chla_20)) %>%
+      mutate(micro_pct = Chla_20*100/(Chla_02 + Chla_2 + Chla_20))
+    
+    write.xlsx(df_phyto_division.rel, file = "R.Figures/Treemaps/July/df_phyto_division.rel_July2020.xlsx")
+
+```
+
+## Summary mean and sd relative abundance of DIVISION in different water masses
+
+# CLASSES
+
+```{r, fig.height=6, fig.width=6}
+
+## PROTIST DIVISION
+division_df_protist_stat <-  df_protist_division.rel %>%
+    filter(light_layer == "Euphotic") %>% ### surface values
+    group_by(Water_mass.TS1, Division) %>% 
+    add_tally() %>%
+    summarise(median = median(n_reads, na.rm = TRUE), mean=mean(n_reads, na.rm = TRUE), sd=sd(n_reads, na.rm = TRUE), n=mean(n, na.rm = TRUE))
+
+ division_df_protist_stat <- division_df_protist_stat %>%
+  arrange(Water_mass.TS1, -mean) 
+
+write.xlsx(division_df_protist_stat, file = "R.Figures/Treemaps/July/division_df_protist_stat.xlsx")
+
+## PROTIST-SYND DIVISION
+division_df_protist_synd_stat <-  df_protist_synd_division.rel %>%
+    filter(light_layer == "Euphotic") %>% ### surface values
+    group_by(Water_mass.TS1, Division) %>% 
+    add_tally() %>%
+    summarise(median = median(n_reads, na.rm = TRUE), mean=mean(n_reads, na.rm = TRUE), sd=sd(n_reads, na.rm = TRUE), n=mean(n, na.rm = TRUE))
+
+ division_df_protist_synd_stat <- division_df_protist_synd_stat %>%
+  arrange(Water_mass.TS1, -mean) 
+
+write.xlsx(division_df_protist_synd_stat, file = "R.Figures/Treemaps/July/division_df_protist_synd_stat.xlsx")
+
+## Phyto DIVISION
+division_df_phyto_stat <-  df_phyto_division.rel %>%
+    filter(light_layer == "Euphotic") %>% ### surface values
+    group_by(Water_mass.TS1, Division) %>% 
+    add_tally() %>%
+    summarise(median = median(n_reads, na.rm = TRUE), mean=mean(n_reads, na.rm = TRUE), sd=sd(n_reads, na.rm = TRUE), n=mean(n, na.rm = TRUE))
+
+ division_df_phyto_stat <- division_df_phyto_stat %>%
+  arrange(Water_mass.TS1, -mean) 
+
+write.xlsx(division_df_phyto_stat, file = "R.Figures/Treemaps/July/division_df_phyto_stat.xlsx")
+
+```
+
+### SCRIPT CURATED DOWN TO HERE ####
+
+## Preprocessing - see http://joey711.github.io/phyloseq/preprocess.html
+
+Keep only samples to be analyzed
+```{r}
+  taxa_reads = sort (taxa_sums(intomob123_sw), decreasing = TRUE) [1:100] # Plot N of reads of the most abundant OTUs 
+  plot(taxa_reads)
+  plot(taxa_reads, type="h", ylim=c(0, 600000))
+  
+# Retain only most abundant taxa
+  topN <- 30
+  most_abundant_taxa <- sort(taxa_sums(intomob123), TRUE)[1:topN]
+  ex2 <- prune_taxa(names(most_abundant_taxa), intomob123)
+  
+  topClass <- tax_table(ex2)[, ] # identify the most abundant OTU affiliations
+   topClass <- tax_table(ex2)[, "Class"] # identify the most abundant OTU affiliations, specifying the taxonomic ranks you want
+  as(topClass, "vector") # Extract now the vector with the information about their Class affiliation 
+
+# keep only taxa with at least 100 reads in total  -----I AM USING THIS CRITERIA FOR NOW
+  intomob123.abund = prune_taxa(taxa_sums(intomob123) > 100, intomob123) 
+  ntaxa(intomob123.abund)
+  ntaxa(intomob123)
+  
+# Across-Sample criteria : Eg., Remove OTUs that do not appear more than 10 times in more than 5% of the samples
+  wh0 = genefilter_sample(intomob123, filterfun_sample(function(x) x > 10), A=0.05*nsamples(intomob123))
+  intomob123.abund2 = prune_taxa(wh0, intomob123)
+  intomob123.abund2
+
+# filter the most abundant taxa - Only keep the taxa that are among the 30 most abundant in at least 1 % of the samples
+  f1  <- filterfun_sample(topk(30))
+  wh1 <- genefilter_sample(intomob123, f1, A=0.01*nsamples(intomob123))
+  intomob123.abund3 = prune_taxa(wh1, intomob123)
+
+   
+#  Keep only the most abundant 12 phyla.---- I prefer to filter based on OTUs abundance either total reads or mixing reads and across samples criteria
+  phylum.sum = tapply(taxa_sums(intomob123), tax_table(intomob123)[, "Division"], sum, na.rm=TRUE)
+  top12phyla = names(sort(phylum.sum, TRUE))[1:12]
+  intomob123.abund4 = prune_taxa((tax_table(intomob123)[, "Division"] %in% top12phyla), intomob123)
+  intomob123.abund4
+  #carbom <- subset_samples(carbom, Select_18S_nifH =="Yes")
+  
+  # PRE-PROCESSING 
+abund.phyto = filter_taxa(ps.relative, function(x) sum(x) > 0.01, TRUE) # optional to filter to the most abundant taxa based on relative (OTU that the sum across all samples > 1 % of all OTUs)
+
+# FILTER only the 15 most abundance classes
+  class.sum = tapply(taxa_sums(ps.relative), tax_table(ps.relative)[, "Class"], sum, na.rm=TRUE)
+  top15class = names(sort(class.sum, TRUE))[1:15]
+  abund.phyto1 = prune_taxa((tax_table(ps.relative)[, "Class"] %in% top15class), ps.relative)
+  abund.phyto1
+  
+  OTUnames10 = names(sort(taxa_sums(ps.protist.rel), TRUE)[1:10]) # list of 10 more abundat OTUs
+
+```
+
+### Calculate total, MEAN, SD of abundance READS per taxonomic rank (otu_table abundances have already been normalized to the median reads per sample- median x reads taxon/reads sample)
+
+```{r}
+    ### relative abundance of PHYTO DIVISIONS
+get_taxa_unique(ps[["STW_surface"]], "Division")
+    division.sum = tapply(taxa_sums(ps[["STW_surface"]]), tax_table(ps[["STW_surface"]])[, "Division"], sum, na.rm=TRUE) # computes total number of reads for different taxon.  
+    division.sum
+    division.mean = tapply(taxa_sums(ps[["STW_surface"]]), tax_table(ps[["STW_surface"]])[, "Division"], mean, na.rm=TRUE) # computes average number of reads per sample for different taxon. 
+    division.mean
+    division.sd = tapply(taxa_sums(ps[["STW_surface"]]), tax_table(ps[["STW_surface"]])[, "Division"], sd, na.rm=TRUE) # computes sd of the mean number of reads per sample for different taxon. 
+    division.sd
+    
+# Mean number of reads per DIVISION samples across different AREAS
+  for (one_sample_type in area) {
+    
+    
+      division.mean <- tapply(taxa_sums(ps[[one_sample_type]]), tax_table(ps[[one_sample_type]])[, "Division"], mean, na.rm=TRUE) # computes total number of reads for different taxon.
+      division.sd <- tapply(taxa_sums(ps[[one_sample_type]]), tax_table(ps[[one_sample_type]])[, "Division"], sd, na.rm=TRUE) # computes sd of the mean number of reads per sample for different taxon. 
+      
+      print(glue("Phyloseq - {one_sample_type}"))
+      print(division.mean)
+      print(division.sd)
+
+      cat("============================\n")
+      
+  }
+```
+
+### Calculate total, MEAN, SD of abundance READS per taxonomic rank (otu_table abundances have already been normalized to the median reads per sample- median x reads taxon/reads sample)
+
+```{r}
+    ### Relative abundance of 15 MOST ABUNDANT TAXONOMIC RANKS (CLASSES) 
+  class.mean <- tapply(taxa_sums(ps[["STW_surface"]]), tax_table(ps[["STW_surface"]])[, "Class"], mean, na.rm=TRUE) 
+  class.mean.df <- as.data.frame(sort(class.mean, TRUE)[1:15])  %>%
+    rownames_to_column(var = "class_name")
+
+  class.sd <- tapply(taxa_sums(ps[["STW_surface"]]), tax_table(ps[["STW_surface"]])[, "Class"], sd, na.rm=TRUE)
+  class.sd.df <- as.data.frame(sort(class.sd, TRUE)) %>%
+  rownames_to_column(var = "class_name")
+  
+  class.mean_SD.df <- left_join(class.mean.df, class.sd.df, by = "class_name")
+     
+   ### Relative abundance of 15 MOST ABUNDANT TAXONOMIC RANKS (SPECIES) 
+
+genus.mean <- tapply(taxa_sums(ps[["STW"]]), tax_table(ps[["STW"]])[, "Genus"], mean, na.rm=TRUE) 
+  genus.mean.df <- as.data.frame(sort(genus.mean, TRUE)[1:15])  %>%
+    rownames_to_column(var = "genus_name")
+  
+    genus.sd <- tapply(taxa_sums(ps[["STW"]]), tax_table(ps[["STW"]])[, "Genus"], sd, na.rm=TRUE)
+  genus.sd.df <- as.data.frame(sort(genus.sd, TRUE)) %>%
+  rownames_to_column(var = "genus_name")
+  
+  genus.mean_SD.df <- left_join(genus.mean.df, genus.sd.df, by = "genus_name")
+  
+  
+  ################# USING LONG FORMAT DATA FRAME CONSTRUCTED FROM PHYLOSEQ OBJECT ###########
+  ## DO YOU WANT THIS LONG FORMAT WITH ABUNDANCES ALREADY NORMALIZED TO SEQUENCING DEPTH??? ###### 
+ 
+ otu_df <- as.data.frame(ps[["Seawater"]]@otu_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "asv_code") %>%
+      pivot_longer(cols = -asv_code,
+                   names_to = "file_code",
+                   values_to = "n_reads",
+                   values_drop_na = TRUE) %>%
+      filter(n_reads != 0) %>%
+      filter(!is.na(n_reads))
+ 
+   taxo_df <- as.data.frame(ps[["Seawater"]]@tax_table@.Data, stringsAsFactors = FALSE) %>%
+      rownames_to_column(var = "asv_code")
+
+    otu_df <- left_join(taxo_df, otu_df)
+    
+     metadata_df <- data.frame(sample_data(ps[["STW_surface"]])) %>%
+      rownames_to_column(var = "file_code")
+
+    otu_df <- left_join(otu_df, metadata_df, by = c("file_code"))
+    
+    # otu_df_division <- otu_df %>%
+    #   group_by(Area, Division, U_Cast) %>%
+    #   summarize(mean = mean(n_reads, na.rm = TRUE), SD = sd(n_reads, na.rm = TRUE))
+
+ ############################################
+######## Plotting relationships between abundances (normalized to sequencing depth) of selected taxon - areas and quantitative environmental variables - e.g. T, Sal, Nutrients, Chla,...
+plot(taxa_sums(intomob123_sw)) # plot the abundancs of the different taxa
+
+Class_level <- tax_glom(ps[["Bay of Plenty"]], taxrank = "Class")
+plot(sort(taxa_sums(Class_level), TRUE) )
+
+plot(taxa_sums(intomob123_sw)) # plot the abundancs of the different taxa
+
+top15class = names(sort(class.mean, TRUE))[1:15]
+  top15class
+  abund.phyto1 = prune_taxa((tax_table(ps.relative)[, "Class"] %in% top15class), ps.relative)
+  abund.phyto1
+```
+
